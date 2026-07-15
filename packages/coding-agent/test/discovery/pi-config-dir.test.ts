@@ -36,4 +36,12 @@ describe("PI_CONFIG_DIR", () => {
 		const expected = path.resolve(path.join(os.homedir(), ".config/omp", "agent", "commands"));
 		expect(result[0]).toEqual({ path: expected, source: ".omp", level: "user" });
 	});
+
+	test("getConfigDirs exposes only the OMP project directory", () => {
+		const cwd = path.join(os.tmpdir(), "omp-config-root-contract");
+
+		expect(getConfigDirs("commands", { user: false, cwd })).toEqual([
+			{ path: path.join(cwd, ".omp", "commands"), source: ".omp", level: "project" },
+		]);
+	});
 });

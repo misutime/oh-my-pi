@@ -1,10 +1,9 @@
 /**
  * SSH JSON Provider
  *
- * Discovers SSH hosts from managed omp config paths and legacy root ssh.json files.
+ * Discovers SSH hosts from managed omp config paths.
  * Priority: 5 (low, project/user config discovery)
  */
-import * as path from "node:path";
 import { getSSHConfigPath, tryParseJson } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { readFile } from "../capability/fs";
@@ -129,8 +128,6 @@ async function load(ctx: LoadContext): Promise<LoadResult<SSHHost>> {
 	const candidateSources: Array<{ path: string; level: "user" | "project" }> = [
 		{ path: getSSHConfigPath("project", ctx.cwd), level: "project" },
 		{ path: getSSHConfigPath("user", ctx.cwd), level: "user" },
-		{ path: path.join(ctx.cwd, "ssh.json"), level: "project" },
-		{ path: path.join(ctx.cwd, ".ssh.json"), level: "project" },
 	];
 	const uniqueSources = candidateSources.filter(
 		(source, index, arr) => arr.findIndex(candidate => candidate.path === source.path) === index,
@@ -147,7 +144,7 @@ async function load(ctx: LoadContext): Promise<LoadResult<SSHHost>> {
 registerProvider(sshCapability.id, {
 	id: PROVIDER_ID,
 	displayName: DISPLAY_NAME,
-	description: "Load SSH hosts from managed omp paths and legacy ssh.json/.ssh.json files",
+	description: "Load SSH hosts from managed omp paths",
 	priority: 5,
 	load,
 });

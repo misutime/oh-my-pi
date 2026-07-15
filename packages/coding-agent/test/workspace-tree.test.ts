@@ -155,30 +155,33 @@ describe("buildWorkspaceTree", () => {
 		expect(tree.rendered).toContain("… 1 more");
 	});
 
-	it("returns AGENTS.md files at directory depths one through four", async () => {
+	it("returns only AGENTS.md files below OMP directories", async () => {
 		const cwd = await makeTempDir();
 
 		await Bun.write(path.join(cwd, "AGENTS.md"), "root rules");
-		await Bun.write(path.join(cwd, "one", "AGENTS.md"), "depth one rules");
-		await Bun.write(path.join(cwd, "one", "two", "AGENTS.md"), "depth two rules");
-		await Bun.write(path.join(cwd, "one", "two", "three", "AGENTS.md"), "depth three rules");
-		await Bun.write(path.join(cwd, "one", "two", "three", "four", "AGENTS.md"), "depth four rules");
-		await Bun.write(path.join(cwd, "one", "two", "three", "four", "five", "AGENTS.md"), "too deep");
+		await Bun.write(path.join(cwd, "one", "AGENTS.md"), "external rules");
+		await Bun.write(path.join(cwd, ".omp", "AGENTS.md"), "OMP root rules");
+		await Bun.write(path.join(cwd, ".omp", "one", "AGENTS.md"), "OMP depth one rules");
+		await Bun.write(path.join(cwd, ".omp", "one", "two", "AGENTS.md"), "OMP depth two rules");
+		await Bun.write(path.join(cwd, ".omp", "one", "two", "three", "AGENTS.md"), "OMP depth three rules");
 
 		const tree = await buildWorkspaceTree(cwd);
 
 		expect(tree.agentsMdFiles).toEqual([
-			"one/AGENTS.md",
-			"one/two/AGENTS.md",
-			"one/two/three/AGENTS.md",
-			"one/two/three/four/AGENTS.md",
+			".omp/AGENTS.md",
+			".omp/one/AGENTS.md",
+			".omp/one/two/AGENTS.md",
+			".omp/one/two/three/AGENTS.md",
 		]);
 	});
 
-	it("surfaces gitignored AGENTS.md files but not AGENTS.md under ignored directories", async () => {
+	it("surfaces gitignored OMP AGENTS.md files but not AGENTS.md under ignored directories", async () => {
 		const cwd = await makeTempDir();
-		await Bun.write(path.join(cwd, ".gitignore"), "src/AGENTS.md\nignored-dir/\nnode_modules/\n.git/\n.hidden/\n");
-		await Bun.write(path.join(cwd, "src", "AGENTS.md"), "src rules");
+		await Bun.write(
+			path.join(cwd, ".gitignore"),
+			".omp/src/AGENTS.md\nignored-dir/\nnode_modules/\n.git/\n.hidden/\n",
+		);
+		await Bun.write(path.join(cwd, ".omp", "src", "AGENTS.md"), "OMP src rules");
 		await Bun.write(path.join(cwd, "src", "main.ts"), "source");
 		await Bun.write(path.join(cwd, "ignored-dir", "AGENTS.md"), "ignored dir rules");
 		await Bun.write(path.join(cwd, "node_modules", "pkg", "AGENTS.md"), "ignored dependency rules");
@@ -188,12 +191,11 @@ describe("buildWorkspaceTree", () => {
 		const tree = await buildWorkspaceTree(cwd);
 
 		expect(tree.rendered).toContain("src/");
-		expect(tree.rendered).toContain("AGENTS.md");
 		expect(tree.rendered).toContain("main.ts");
 		expect(tree.rendered).not.toContain("ignored-dir");
 		expect(tree.rendered).not.toContain("node_modules");
 		expect(tree.rendered).not.toContain(".hidden");
-		expect(tree.agentsMdFiles).toEqual(["src/AGENTS.md"]);
+		expect(tree.agentsMdFiles).toEqual([".omp/src/AGENTS.md"]);
 	});
 
 	it("renders prompt-cache-stable absolute mtimes (not render-time relative ages)", async () => {

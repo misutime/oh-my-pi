@@ -11,6 +11,7 @@ import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability
 import { clearClaudePluginRootsCache } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import "@oh-my-pi/pi-coding-agent/discovery/claude-plugins";
 
 const PLUGIN_AGENT_MD = [
 	"---",

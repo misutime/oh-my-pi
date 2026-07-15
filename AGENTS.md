@@ -20,6 +20,20 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 | `packages/utils`        | Shared utilities (logger, streams, temp files)       |
 | `crates/pi-natives`     | Rust crate for performance-critical text/grep ops    |
 
+## Intentional Divergence from Upstream
+
+This fork loads coding-tool configuration only from `~/.omp/` (user) and `.omp/` (project). It must not automatically discover configuration from other coding tools, including `.claude/`, `.codex/`, `.gemini/`, `.cursor/`, `.vscode/`, `.github/`, `.agent/`, `.agents/`, OpenCode, Cline, Windsurf, or standalone project-root `mcp.json` files.
+
+The upstream provider modules remain in `packages/coding-agent/src/discovery/` deliberately, so upstream changes merge normally. The policy boundary is their absence from `packages/coding-agent/src/discovery/index.ts`: do not restore their side-effect imports. Keep the additional non-provider entry points OMP-only as well:
+
+- `config.ts` config-root priority;
+- `helpers.ts` plugin registry loading;
+- `workspace-tree.ts` AGENTS.md collection;
+- `ssh.ts` root-level SSH config loading; and
+- `substitute-plugin-root.ts` plugin-root placeholder handling.
+
+When merging upstream, retain this small policy layer and accept upstream changes to the dormant provider modules and their tests. Do not delete those files again. See `docs/omp-only-configuration.md` for the user-facing behavior.
+
 **Catalog import convention**: code in this repo imports catalog *values* (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
 ## GitHub

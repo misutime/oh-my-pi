@@ -18,17 +18,20 @@ import type { LoadContext, LoadResult } from "../capability/types";
 import {
 	type ClaudePluginRoot,
 	createSourceMeta,
+	enableClaudePluginRegistry,
 	expandEnvVarsDeep,
 	listClaudePluginRoots,
 	loadFilesFromDir,
 	scanSkillsFromDir,
 } from "./helpers";
 
-import { resolvePluginStdioPaths, substitutePluginRoot } from "./substitute-plugin-root";
+import { resolvePluginStdioPaths, substituteClaudePluginRoot } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "claude-plugins";
 const DISPLAY_NAME = "Claude Code Marketplace";
 const PRIORITY = 70; // Below claude.ts (80) so user .claude/ overrides win
+
+enableClaudePluginRegistry();
 
 interface ClaudePluginManifest {
 	skills?: string | string[];
@@ -442,8 +445,8 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 			}
 			const namespacedName = root.plugin ? `${root.plugin}:${serverName}` : serverName;
 			const substitutedCommand =
-				raw.command !== undefined ? substitutePluginRoot(raw.command, root.path) : undefined;
-			const substitutedCwd = raw.cwd !== undefined ? substitutePluginRoot(raw.cwd, root.path) : undefined;
+				raw.command !== undefined ? substituteClaudePluginRoot(raw.command, root.path) : undefined;
+			const substitutedCwd = raw.cwd !== undefined ? substituteClaudePluginRoot(raw.cwd, root.path) : undefined;
 			// Root relative command/cwd at the plugin's config directory, not the
 			// session cwd (MCP stdio spawning resolves relative values there).
 			const rooted = resolvePluginStdioPaths({ command: substitutedCommand, cwd: substitutedCwd }, root.path);
@@ -452,8 +455,8 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				...(raw.enabled !== undefined && { enabled: raw.enabled }),
 				...(raw.timeout !== undefined && { timeout: raw.timeout }),
 				...(rooted.command !== undefined && { command: rooted.command }),
-				...(raw.args !== undefined && { args: substitutePluginRoot(raw.args, root.path) }),
-				...(raw.env !== undefined && { env: substitutePluginRoot(raw.env, root.path) }),
+				...(raw.args !== undefined && { args: substituteClaudePluginRoot(raw.args, root.path) }),
+				...(raw.env !== undefined && { env: substituteClaudePluginRoot(raw.env, root.path) }),
 				...(rooted.cwd !== undefined && { cwd: rooted.cwd }),
 				...(raw.url !== undefined && { url: expandEnvVarsDeep(raw.url) }),
 				...(raw.headers !== undefined && { headers: expandEnvVarsDeep(raw.headers) }),

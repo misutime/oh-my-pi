@@ -1,25 +1,36 @@
 import * as path from "node:path";
 
 /**
- * Recursively substitute ${CLAUDE_PLUGIN_ROOT} and ${OMP_PLUGIN_ROOT}
+ * Recursively substitute ${OMP_PLUGIN_ROOT}
  * with the actual plugin root path in strings, arrays, and plain objects.
  */
-// Use concatenation to avoid noTemplateCurlyInString lint rule on literal placeholder names
-const CLAUDE_VAR = "$" + "{CLAUDE_PLUGIN_ROOT}";
 const OMP_VAR = "$" + "{OMP_PLUGIN_ROOT}";
+const CLAUDE_VAR = "$" + "{CLAUDE_PLUGIN_ROOT}";
 
 export function substitutePluginRoot<T>(value: T, rootPath: string): T {
+	return substitutePluginRoots(value, rootPath, [OMP_VAR]);
+}
+
+/**
+ * Substitute placeholders used by an explicitly imported Claude marketplace
+ * provider without extending the OMP plugin surface.
+ */
+export function substituteClaudePluginRoot<T>(value: T, rootPath: string): T {
+	return substitutePluginRoots(value, rootPath, [CLAUDE_VAR, OMP_VAR]);
+}
+
+function substitutePluginRoots<T>(value: T, rootPath: string, variables: readonly string[]): T {
 	if (typeof value === "string") {
-		return value.replaceAll(CLAUDE_VAR, rootPath).replaceAll(OMP_VAR, rootPath) as T;
+		return variables.reduce((result, variable) => result.replaceAll(variable, rootPath), value) as T;
 	}
 	if (Array.isArray(value)) {
-		return value.map(v => substitutePluginRoot(v, rootPath)) as T;
+		return value.map(v => substitutePluginRoots(v, rootPath, variables)) as T;
 	}
 	if (value && typeof value === "object") {
 		const result: Record<string, unknown> = Object.create(null);
 		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
 			Object.defineProperty(result, k, {
-				value: substitutePluginRoot(v, rootPath),
+				value: substitutePluginRoots(v, rootPath, variables),
 				enumerable: true,
 				writable: true,
 				configurable: true,

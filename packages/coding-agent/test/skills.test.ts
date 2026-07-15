@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
+import "@oh-my-pi/pi-coding-agent/discovery/agents";
+import "@oh-my-pi/pi-coding-agent/discovery/claude";
 import {
 	loadSkills,
 	loadSkillsFromDir,

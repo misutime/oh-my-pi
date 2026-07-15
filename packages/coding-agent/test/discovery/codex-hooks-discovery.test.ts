@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { type Hook, hookCapability } from "@oh-my-pi/pi-coding-agent/capability/hook";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings, loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
+import "@oh-my-pi/pi-coding-agent/discovery/codex";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 describe("codex hook discovery", () => {

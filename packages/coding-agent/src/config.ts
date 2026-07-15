@@ -6,12 +6,7 @@ import { expandTilde } from "./tools/path-utils";
 
 export * from "./config/config-file";
 
-const priorityList = [
-	{ dir: CONFIG_DIR_NAME, globalAgentDir: getConfigAgentDirName },
-	{ dir: ".claude" },
-	{ dir: ".codex" },
-	{ dir: ".gemini" },
-];
+const priorityList = [{ dir: CONFIG_DIR_NAME, globalAgentDir: getConfigAgentDirName }];
 
 // =============================================================================
 // Package Directory (for optional external docs/examples)
@@ -77,8 +72,8 @@ export function getChangelogPath(): string | undefined {
 
 /**
  * Config directory bases in priority order (highest first).
- * User-level: ~/.omp/agent, ~/.claude, ~/.codex, ~/.gemini
- * Project-level: .omp, .claude, .codex, .gemini
+ * User-level: ~/.omp/agent
+ * Project-level: .omp
  */
 const USER_CONFIG_BASES = priorityList.map(({ dir, globalAgentDir }) => ({
 	base: () => path.join(os.homedir(), globalAgentDir ? globalAgentDir() : dir),
@@ -92,7 +87,7 @@ const PROJECT_CONFIG_BASES = priorityList.map(({ dir }) => ({
 
 export interface ConfigDirEntry {
 	path: string;
-	source: string; // e.g., ".omp", ".claude"
+	source: string; // e.g., ".omp"
 	level: "user" | "project";
 }
 

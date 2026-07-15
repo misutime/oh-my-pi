@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { FileType, type GlobMatch, listWorkspace } from "@oh-my-pi/pi-natives";
-import { formatAge, formatBytes } from "@oh-my-pi/pi-utils";
+import { CONFIG_DIR_NAME, formatAge, formatBytes } from "@oh-my-pi/pi-utils";
 
 /** Defaults for the workspace tree shown in the system prompt. */
 const WORKSPACE_DEFAULTS = {
@@ -92,12 +92,18 @@ export async function buildWorkspaceTree(cwd: string, options: BuildWorkspaceTre
 		const result = await listWorkspace({
 			path: rootPath,
 			maxDepth: WORKSPACE_DEFAULTS.maxDepth,
-			hidden: false,
+			// OMP-owned AGENTS.md files live in a hidden directory. Scan hidden
+			// paths so they can be collected, then keep them out of the visible
+			// workspace tree below.
+			hidden: true,
 			gitignore: true,
 			collectAgentsMd: true,
 			timeoutMs: options.timeoutMs,
 		});
-		const tree = assembleTree(rootPath, result.entries, {
+		const visibleEntries = result.entries.filter(
+			entry => !entry.path.split("/").some(segment => segment.startsWith(".")),
+		);
+		const tree = assembleTree(rootPath, visibleEntries, {
 			perDirLimit: WORKSPACE_DEFAULTS.perDirLimit,
 			rootLimit: WORKSPACE_DEFAULTS.perDirLimit,
 			lineCap: WORKSPACE_DEFAULTS.lineCap,
@@ -107,7 +113,8 @@ export async function buildWorkspaceTree(cwd: string, options: BuildWorkspaceTre
 			// bust the prompt cache (a relative "Nm ago" drifts every build).
 			ageMode: "absolute",
 		});
-		return { ...tree, agentsMdFiles: result.agentsMdFiles };
+		const ompAgentsMd = result.agentsMdFiles.filter(file => file.split("/").includes(CONFIG_DIR_NAME));
+		return { ...tree, agentsMdFiles: ompAgentsMd };
 	} catch {
 		return { ...emptyTree(rootPath), agentsMdFiles: [] };
 	}

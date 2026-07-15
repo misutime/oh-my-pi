@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Restricted automatic configuration discovery to OMP-owned `~/.omp/` and `.omp/` paths; migrate configuration from other coding tools into OMP before relying on it.
+
 ## [16.5.2] - 2026-07-14
 
 ### Breaking Changes

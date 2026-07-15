@@ -6,6 +6,7 @@ import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability
 import { type SlashCommand, slashCommandCapability } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
+import "@oh-my-pi/pi-coding-agent/discovery/claude";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 async function writeFile(filePath: string, content: string): Promise<void> {

@@ -846,15 +846,28 @@ const pluginRootsCache = new Map<string, { roots: ClaudePluginRoot[]; warnings: 
 
 const pluginCacheInvalidators = new Set<() => void>();
 
+/**
+ * Explicit SDK imports of the legacy Claude marketplace provider opt in to its
+ * registry. The normal OMP discovery entry point leaves this false.
+ */
+let claudePluginRegistryEnabled = false;
+
+/** Enable the legacy Claude marketplace registry for an explicitly imported provider. */
+export function enableClaudePluginRegistry(): void {
+	if (claudePluginRegistryEnabled) return;
+	claudePluginRegistryEnabled = true;
+	clearClaudePluginRootsCache();
+}
+
 /** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
 export function registerPluginCacheInvalidator(invalidator: () => void): void {
 	pluginCacheInvalidators.add(invalidator);
 }
 
 /**
- * List all installed Claude Code plugin roots from the plugin cache.
- * Reads ~/.claude/plugins/installed_plugins.json and ~/.omp/plugins/installed_plugins.json,
- * and optionally the nearest project-scoped registry resolved from `cwd`.
+ * List installed plugin roots from the plugin cache. The normal OMP entry
+ * point reads only OMP registries; an explicitly imported Claude marketplace
+ * provider additionally enables its legacy registry.
  *
  * Results are cached per `home:resolvedProjectPath` key to avoid repeated parsing.
  */
@@ -871,9 +884,9 @@ export async function listClaudePluginRoots(
 	const warnings: string[] = [];
 	const projectRoots: ClaudePluginRoot[] = [];
 
-	// ── Claude Code registry ──────────────────────────────────────────────────
+	// ── Claude Code registry (explicit provider import only) ─────────────────
 	const registryPath = path.join(home, ".claude", "plugins", "installed_plugins.json");
-	const content = await readFile(registryPath);
+	const content = claudePluginRegistryEnabled ? await readFile(registryPath) : null;
 
 	if (content) {
 		const registry = parseClaudePluginsRegistry(content);
@@ -916,7 +929,6 @@ export async function listClaudePluginRoots(
 	}
 
 	// ── OMP installed plugins registry ───────────────────────────────────────
-	// OMP registry is authoritative: its entries replace Claude's entries for the same plugin ID.
 	// In production `home` is `os.homedir()`, so `getPluginsDir(home)` resolves to the
 	// same XDG-aware path the marketplace writer uses (reads and writes always agree).
 	// Tests pass a temp dir, which short-circuits the resolver for deterministic isolation.
@@ -937,7 +949,7 @@ export async function listClaudePluginRoots(
 				const marketplace = pluginId.slice(atIndex + 1);
 
 				// OMP is authoritative: drop all Claude-sourced entries for this plugin ID
-				const filtered = roots.filter(r => r.id !== pluginId);
+				const filtered = roots.filter(root => root.id !== pluginId);
 				roots.length = 0;
 				roots.push(...filtered);
 
@@ -1081,7 +1093,7 @@ export function getPreloadedPluginRoots(): readonly ClaudePluginRoot[] {
 
 /**
  * Inject synthetic plugin roots from --plugin-dir paths.
- * These are prepended to the cache with highest precedence (before OMP/Claude entries).
+ * These are prepended to the cache with highest precedence (before OMP entries).
  * Must be called before any listClaudePluginRoots() access.
  */
 export async function injectPluginDirRoots(home: string, dirs: string[], cwd?: string): Promise<void> {

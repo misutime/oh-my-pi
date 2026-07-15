@@ -2,29 +2,21 @@
 
 This guide explains how to add, edit, and validate MCP servers for the OMP coding agent.
 
+> **OMP fork policy:** only `.omp/mcp.json` and `~/.omp/agent/mcp.json` (or its active-profile equivalent) are loaded automatically. See [OMP-only configuration](./omp-only-configuration.md).
+
 Source of truth in code:
 
 - Runtime config types: `packages/coding-agent/src/mcp/types.ts`
 - Config writer: `packages/coding-agent/src/mcp/config-writer.ts`
 - Loader + validation: `packages/coding-agent/src/mcp/config.ts`
-- Standalone `mcp.json` discovery: `packages/coding-agent/src/discovery/mcp-json.ts`
 - Schema: `packages/coding-agent/src/config/mcp-schema.json`
 
-## Preferred config locations
-
-OMP can discover MCP servers from multiple tools (`.claude/`, `.cursor/`, `.vscode/`, `opencode.json`, and more), but for OMP-native configuration you should usually use one of these primary files:
+## Config locations
 
 - Project: `.omp/mcp.json`
 - User: `~/.omp/agent/mcp.json` (or `~/.omp/profiles/<name>/agent/mcp.json` when a named profile is active — see [Profiles](#profiles))
 
 The native provider also reads `.omp/.mcp.json` and `~/.omp/agent/.mcp.json` for compatibility, but OMP writes to the primary `mcp.json` paths above.
-
-OMP also accepts fallback standalone files in the project root:
-
-- `mcp.json`
-- `.mcp.json`
-
-Use `.omp/mcp.json` or `~/.omp/agent/mcp.json` when you want OMP to own the configuration. Use root `mcp.json` / `.mcp.json` only when you want a portable fallback file that other MCP clients may also read.
 
 ### Profiles
 
@@ -35,7 +27,7 @@ Named profiles (`omp --profile <name>`, the `--alias` shortcut, or `OMP_PROFILE`
 
 Discovery, the `/mcp` commands, and the config writer all follow the active profile, so a profile sees **only** its own user-level servers — never the default profile's `~/.omp/agent/mcp.json`. Add a server to a profile by launching under it (`omp --profile <name>`) and running `/mcp add` → User level, or by editing `~/.omp/profiles/<name>/agent/mcp.json` directly.
 
-Project-scoped MCP config (`.omp/mcp.json`) is keyed to the working directory, not the profile, so it applies under every profile. External-tool configs (`.claude/`, `.cursor/`, etc.) are also profile-independent because they belong to those tools rather than to an OMP profile.
+Project-scoped MCP config (`.omp/mcp.json`) is keyed to the working directory, not the profile, so it applies under every profile.
 
 MCP follows the same profile rules as the rest of OMP-native config; see [Configuration Discovery → Profiles](./config-usage.md#profiles).
 
@@ -203,7 +195,7 @@ for an `http`/`sse` server it stores the credential under a deterministic id
 derived from the active profile and server URL
 (`mcp_oauth:profile:<profile>:<url>`), with the refresh material embedded. Any
 config that points at the same URL — including a *definition-only* entry in a
-shared project `mcp.json` with no `auth` block at all — resolves the active
+shared project `.omp/mcp.json` with no `auth` block at all — resolves the active
 profile's own credential automatically, including when auth storage is backed by
 a shared auth broker. This is what makes project-scoped servers safe across
 profiles: commit the definition, and each profile authorizes (and stays signed
@@ -218,7 +210,7 @@ picks up local auth state. An explicitly
 configured `Authorization` header always wins over the url-keyed binding.
 
 The binding is per profile but not per project: once a profile has authorized
-a URL, *any* checkout whose `mcp.json` defines a server at that URL connects
+a URL, *any* checkout whose `.omp/mcp.json` defines a server at that URL connects
 with that profile's credential automatically. Committed MCP definitions are
 trusted input — the same already applies to `stdio` entries, which run
 arbitrary commands — so review a repository's `mcp.json` before opening it
@@ -365,7 +357,7 @@ This is the part that usually trips people up.
 
 ### Discovery-time `${...}` expansion
 
-OMP expands `${VAR}` and `${VAR:-default}` placeholders while discovering MCP configs from OMP-native files and standalone fallback files. Expansion applies recursively to string values in `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`; unresolved placeholders remain literal strings.
+OMP expands `${VAR}` and `${VAR:-default}` placeholders while discovering MCP configs from OMP-owned files. Expansion applies recursively to string values in `command`, `args`, `env`, `cwd`, `url`, `headers`, `auth`, and `oauth`; unresolved placeholders remain literal strings.
 
 Example:
 
@@ -413,7 +405,7 @@ That means this is valid and convenient for local secrets:
 
 ## `disabledServers`
 
-`disabledServers` is read from the user config file (`~/.omp/agent/mcp.json`) when a server is discovered from any source and you want OMP to ignore it without editing that other tool's config.
+`disabledServers` is read from the user config file (`~/.omp/agent/mcp.json`) when you want OMP to ignore a discovered server without removing its definition.
 
 Example:
 
@@ -459,13 +451,13 @@ Practical implications:
 
 ## Discovery and precedence
 
-OMP does not merge duplicate server definitions across files. Discovery providers are prioritized, and the higher-priority definition wins. Separately, `disabledServers` from `~/.omp/agent/mcp.json` can suppress a discovered server by name.
+OMP does not merge duplicate server definitions across files. The native OMP provider is prioritized by project and user scope, and `disabledServers` from `~/.omp/agent/mcp.json` can suppress a discovered server by name.
 
 In practice:
 
-- prefer `.omp/mcp.json` or `~/.omp/agent/mcp.json` when you want an OMP-specific override
-- keep server names unique across tools when possible
-- use `disabledServers` in the user config when a third-party config keeps reintroducing a server you do not want
+- use `.omp/mcp.json` for a project definition and `~/.omp/agent/mcp.json` for a user definition
+- keep server names unique across OMP configuration files
+- use `disabledServers` in the user config to suppress a server without changing its defining file
 
 ## Troubleshooting
 
@@ -486,9 +478,9 @@ The JSON is valid, but the server may still be unreachable. Use `/mcp test <name
 - the remote URL is reachable
 - the OAuth or API token is valid
 
-### The server exists in another tool's config but not in OMP
+### A server definition is not visible in OMP
 
-Run `/mcp list`. OMP discovers many third-party MCP files, but project-level loading can also be disabled via the `mcp.enableProjectConfig` setting, and a user-level `disabledServers` entry can suppress a server by name.
+Move the definition into `.omp/mcp.json` or `~/.omp/agent/mcp.json`, then run `/mcp reload`. Project-level loading can also be disabled via the `mcp.enableProjectConfig` setting, and a user-level `disabledServers` entry can suppress a server by name.
 
 ## References
 

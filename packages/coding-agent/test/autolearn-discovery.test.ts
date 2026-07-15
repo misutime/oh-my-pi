@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getManagedSkillsDir } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import "@oh-my-pi/pi-coding-agent/discovery";
+import "@oh-my-pi/pi-coding-agent/discovery/agents";
+import "@oh-my-pi/pi-coding-agent/discovery/claude";
 import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";

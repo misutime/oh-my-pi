@@ -2,6 +2,8 @@
 
 This document describes how the coding-agent resolves configuration today: which roots are scanned, how precedence works, and how resolved config is consumed by settings, skills, hooks, tools, and extensions.
 
+> **OMP fork policy:** this fork reads automatic coding-tool configuration only from `~/.omp/` and `.omp/`. See [OMP-only configuration](./omp-only-configuration.md).
+
 ## Scope
 
 Primary implementation:
@@ -29,8 +31,8 @@ Key integration points:
 ```text
          Generic helper order (`config.ts`)
 ┌───────────────────────────────────────┐
-│ 1) ~/.omp/agent, ~/.claude, ...       │
-│ 2) <cwd>/.omp, <cwd>/.claude, ...     │
+│ 1) ~/.omp/agent                        │
+│ 2) <cwd>/.omp                          │
 └───────────────────────────────────────┘
                     │
                     ▼
@@ -53,23 +55,14 @@ Key integration points:
 `src/config.ts` defines a fixed source priority list:
 
 1. `.omp` (native)
-2. `.claude`
-3. `.codex`
-4. `.gemini`
 
 User-level bases:
 
 - `~/.omp/agent`
-- `~/.claude`
-- `~/.codex`
-- `~/.gemini`
 
 Project-level bases:
 
 - `<cwd>/.omp`
-- `<cwd>/.claude`
-- `<cwd>/.codex`
-- `<cwd>/.gemini`
 
 `CONFIG_DIR_NAME` is `.omp` (`packages/utils/src/dirs.ts`).
 
@@ -81,7 +74,7 @@ The relocation is uniform across the native provider (`builtin.ts`) and the gene
 
 Keybindings are the one exception: a named profile merges the default profile's `~/.omp/agent/keybindings.*` under its own `~/.omp/profiles/<name>/agent/keybindings.*`, with the profile file overriding per binding ([#4867](https://github.com/can1357/oh-my-pi/issues/4867)). Keybindings describe the terminal/keyboard in front of the user, which doesn't change with the active profile, so user-level remaps keep working in every profile unless the profile explicitly overrides them. The inherited file is read-only for the profile process — legacy-format migration of the default profile's file only happens when the default profile itself runs.
 
-The other source bases are not profile-scoped and load identically under every profile: the external-tool bases (`~/.claude`, `~/.codex`, `~/.gemini`) belong to those tools, and the project-level bases (`<cwd>/.omp`, `<cwd>/.claude`, ...) are keyed to the working directory. Throughout this document, read `~/.omp/agent` as shorthand for the active profile's agent directory.
+Project-level configuration remains keyed to the working directory. Throughout this document, read `~/.omp/agent` as shorthand for the active profile's agent directory.
 
 ## Important constraint
 
@@ -113,7 +106,7 @@ Searches for the first existing file across ordered bases, returns first match (
 
 ## `findAllNearestProjectConfigDirs(subpath, cwd)`
 
-Walks parent directories upward and returns the **nearest existing directory per source base** (`.omp`, `.claude`, `.codex`, `.gemini`), then sorts results by source priority.
+Walks parent directories upward and returns the nearest existing `.omp` directory.
 
 Use this when project config should be inherited from ancestor directories (monorepo/nested workspace behavior).
 
@@ -187,17 +180,11 @@ Most non-core config loading flows through the capability registry (`src/capabil
 Providers are sorted by numeric priority (higher first). Example priorities:
 
 - Native OMP (`builtin.ts`): `100`
-- Claude: `80`
-- Codex / agents / Claude marketplace: `70`
-- Gemini: `60`
 
 ```text
 Provider precedence (higher wins)
 
 native (.omp)          priority 100
-claude                 priority  80
-codex / agents / ...   priority  70
-gemini                 priority  60
 ```
 
 ## Dedup semantics

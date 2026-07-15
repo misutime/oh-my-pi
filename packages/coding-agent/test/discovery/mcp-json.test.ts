@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type MCPServer, mcpCapability } from "@oh-my-pi/pi-coding-agent/capability/mcp";
 import { loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
+import "@oh-my-pi/pi-coding-agent/discovery/mcp-json";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 async function loadStandaloneMcpConfig(cwd: string): Promise<MCPServer[]> {
