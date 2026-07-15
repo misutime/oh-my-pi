@@ -5,6 +5,20 @@
 ### Breaking Changes
 
 - Restricted automatic configuration discovery to OMP-owned `~/.omp/` and `.omp/` paths; migrate configuration from other coding tools into OMP before relying on it.
+### Added
+
+- Added per-agent prewalk for subagents: a `prewalk` frontmatter field (`true` = hand off to the default prewalk target, a string = custom target model pattern) and a `task.agentPrewalk` settings override toggled per agent from the `/agents` dashboard with `P`. The bundled generic `task` agent ships with prewalk enabled by default (skipped when the target resolves to the subagent's own starting model, and never armed for plan-mode spawns). Prewalk-armed subagents keep the normally parent-owned `todo` tool so the plan-nudge → todo → hand-off flow works, and the prewalk todo gate now keys on the active tool set instead of the registry so a deactivated todo tool can no longer stall the switch.
+
+### Changed
+
+- Changed the default `astGrep.enabled` setting to `false`
+- Batched todo operations with real tool calls to prevent solo todo turns and extra round trips
+
+### Fixed
+
+- Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions ([#5535](https://github.com/can1357/oh-my-pi/issues/5535)).
+- Fixed the built-in `fd` printing `fd: Broken pipe (os error 32)` when a downstream pipeline reader exited early (e.g. `fd … | head`); it now exits silently with 141 (128+SIGPIPE), matching real fd.
+- Fixed prewalk repeatedly continuing after a bash-only task such as `commit` had already completed ([#5551](https://github.com/can1357/oh-my-pi/issues/5551)).
 
 ## [16.5.2] - 2026-07-14
 
@@ -429,6 +443,7 @@
 - Fixed retry fallback model recovery by exposing `retry.fallbackChains` in `/settings`, adding a `/model` action to assign the selected default fallback model, and clearing a selected model's retry cooldown marker on manual model switches. ([#4533](https://github.com/can1357/oh-my-pi/issues/4533))
 - Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 - Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
+- Fixed TTSR rules with a leading `(?i)`/`(?m)`/`(?s)` inline regex flag never registering: `new RegExp("(?i)...")` throws in Bun/JS, so the condition failed to compile and the rule was silently dropped. Leading inline flag groups are now translated to native `RegExp` flags. Also recover `scope` tokens and sibling values from malformed frontmatter (e.g. `scope: "text","thinking"`), which previously left literal quotes on the parsed values ([#4796](https://github.com/can1357/oh-my-pi/issues/4796)).
 
 ## [16.3.11] - 2026-07-06
 

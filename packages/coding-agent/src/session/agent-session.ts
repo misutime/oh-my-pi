@@ -1748,9 +1748,11 @@ export class AgentSession {
 	#prewalk: Prewalk | undefined;
 	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
 	#prewalkPlanInjected = false;
+	/** Armed by plan/tool progress; consumed by one text-only continuation. */
+	#prewalkContinuePending = false;
 	/** True once any successful `todo` call landed — opens the prewalk
 	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
-	 *  list exists (sessions without a todo tool skip the gate). */
+	 *  list exists (sessions without an ACTIVE todo tool skip the gate). */
 	#prewalkTodoSeen = false;
 	#planYolo: PlanYolo | undefined;
 	#planYoloPreviousTools: string[] | undefined;
@@ -2247,15 +2249,23 @@ export class AgentSession {
 		const prewalk = this.#prewalk;
 		if (!prewalk || context?.message.role !== "assistant") return;
 
-		// Structural safety net: every branch below assumes the agent loop will
-		// run another turn. It won't if THIS turn had no tool calls — the loop
-		// treats a text-only turn as "the agent is done" and ends the session
-		// with no further prompting. The plan nudge explicitly asks for a prose
-		// reply, which makes a text-only turn common right after it — observed
-		// silently killing production SWE-bench runs before any code was ever
-		// written. Force one more turn only in that specific, self-created
-		// hazard window.
-		if (this.#prewalkPlanInjected && context.toolResults.length === 0) {
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
+		if (todoCalledThisTurn) {
+			this.#prewalkTodoSeen = true;
+		}
+
+		// The plan nudge asks for a prose plan before implementation begins,
+		// but the agent loop treats each text-only reply as terminal. Tool
+		// progress re-arms one continuation, allowing split flows such as
+		// plan → todo → prose → read → prose → edit/write. Consuming the arm
+		// before steering also detects completion: two consecutive text-only
+		// replies have no intervening progress, so the second ends naturally
+		// instead of producing the #5551 loop.
+		const hasToolResults = context.toolResults.length > 0;
+		if (this.#prewalkPlanInjected && hasToolResults) {
+			this.#prewalkContinuePending = true;
+		} else if (this.#prewalkContinuePending) {
+			this.#prewalkContinuePending = false;
 			this.agent.steer({
 				role: "custom",
 				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
@@ -2270,18 +2280,18 @@ export class AgentSession {
 		// todo list from it and start" — so the switch waits until a todo list
 		// exists AND the model has actually started implementing (first
 		// edit/write). The todo call itself never triggers: firing there handed
-		// the fast model the whole implementation cold. Sessions without a todo
-		// tool skip the gate.
-		if (context.toolResults.some(result => result.toolName === "todo")) {
-			this.#prewalkTodoSeen = true;
-		}
-		const todoGateOpen = this.#prewalkTodoSeen || !this.#toolRegistry.has("todo");
+		// the fast model the whole implementation cold. The gate keys on the
+		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
+		// (e.g. a restricted active-tool slate) is uncallable and would
+		// deadlock the switch.
+		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
 			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
 			: undefined;
 		if (!action) {
 			if (!this.#prewalkPlanInjected) {
 				this.#prewalkPlanInjected = true;
+				this.#prewalkContinuePending = true;
 				this.agent.steer({
 					role: "custom",
 					customType: PREWALK_PLAN_MESSAGE_TYPE,
@@ -2342,6 +2352,7 @@ export class AgentSession {
 		}
 		this.#prewalk = { target, thinkingLevel };
 		this.#prewalkPlanInjected = true;
+		this.#prewalkContinuePending = true;
 		this.agent.steer({
 			role: "custom",
 			customType: PREWALK_PLAN_MESSAGE_TYPE,

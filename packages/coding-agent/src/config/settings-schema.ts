@@ -3538,7 +3538,7 @@ export const SETTINGS_SCHEMA = {
 
 	"astGrep.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "tools",
 			group: "Available Tools",
@@ -4261,6 +4261,10 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"task.agentModelOverrides": {
+		type: "record",
+		default: {} as Record<string, string>,
+	},
+	"task.agentPrewalk": {
 		type: "record",
 		default: {} as Record<string, string>,
 	},
