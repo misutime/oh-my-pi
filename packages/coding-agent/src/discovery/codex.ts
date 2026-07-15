@@ -135,6 +135,7 @@ interface CodexMCPConfig {
 	cwd?: string;
 	startup_timeout_sec?: number;
 	tool_timeout_sec?: number;
+	enabled?: boolean;
 	enabled_tools?: string[];
 	disabled_tools?: string[];
 }
@@ -153,6 +154,8 @@ function extractMCPServersFromToml(toml: Record<string, unknown>): Record<string
 			command: config.command,
 			args: config.args,
 			url: config.url,
+			cwd: config.cwd,
+			enabled: config.enabled,
 		};
 
 		// Build env by merging explicit env and forwarded env_vars
