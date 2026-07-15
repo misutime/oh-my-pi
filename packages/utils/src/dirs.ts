@@ -25,8 +25,8 @@ export const CONFIG_DIR_NAME: string = ".omp";
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 
-/** Version (e.g. "1.0.0") */
-export const VERSION: string = version;
+/** Version string; appends "-dev" when running from source (not a compiled binary). */
+export const VERSION: string = `${version}${import.meta.url.includes("$bunfs") || import.meta.url.includes("~BUN") || import.meta.url.includes("%7EBUN") ? "" : "-dev"}`;
 
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
