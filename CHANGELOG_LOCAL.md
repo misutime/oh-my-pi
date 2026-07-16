@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- `bun setup` 在 Windows 上 `sh` 找不到的问题，用跨平台 `scripts/link-omp.ts` 替代 shell 脚本 (`defe281f`)
 - MCP 连接状态消息不再使用 dim 淡色显示，确保可读性 (`6b2b76d0`)
 
 <!-- 最后记录的 commit: 2727d7fb -->
