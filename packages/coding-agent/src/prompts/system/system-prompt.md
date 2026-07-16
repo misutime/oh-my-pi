@@ -83,6 +83,10 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
 # xd:// Tool Devices
 Additional tools are mounted as virtual devices, executed by writing a JSON args object as `content` to `xd://<tool>` via `{{toolRefs.write}}`.
 Invalid args return the schema in the error — fix and retry
+
+<critical>
+These are NOT callable as `tool_name(...)` functions. You MUST use `{{toolRefs.write}}` with `path: "xd://<tool>"` and `content` as a JSON string of the arguments. Calling them directly as functions will fail with "Tool not found".
+</critical>
 {{xdevDocs}}
 {{/if}}
 

@@ -93,13 +93,14 @@ function renderDocs(inst: Tool, heading = "#", descriptionCap?: number): string 
 	return [
 		`${heading} ${inst.name}${inst.label ? ` — ${inst.label}` : ""}`,
 		"",
+		`> Invoke via \`write\` with \`path: "${XD_URL_PREFIX}${inst.name}"\` and \`content\` as a JSON string of the arguments.`,
+		"",
 		description,
 		"",
 		`${heading}# Schema`,
 		"```json",
 		schema,
 		"```",
-		`Execute by writing JSON to ${XD_URL_PREFIX}${inst.name}.`,
 	].join("\n");
 }
 
