@@ -264,6 +264,14 @@ Location: `packages/*/CHANGELOG.md` (per package).
 - Internal (from issues): `Fixed foo bar ([#123](https://github.com/can1357/oh-my-pi/issues/123))`.
 - External contributions: `Added feature X ([#456](https://github.com/can1357/oh-my-pi/pull/456) by [@username](https://github.com/username))`.
 
+## Fork Changelog
+
+Location: `CHANGELOG_LOCAL.md` (repo root).
+
+Every fork-specific change to code outside `plans/` MUST be recorded in `CHANGELOG_LOCAL.md` under the appropriate `[Unreleased]` section. Each entry appends the short commit hash in backticks, e.g. `(\`a1b2c3d4\`)`.
+
+**Review workflow**: the file footer contains `<!-- 最后记录的 commit: <hash> -->`. To check for unrecorded changes, run `git log <hash>..HEAD --oneline --no-merges` and filter out `plans/` and meta commits. After recording, update the footer to the latest reviewed commit hash.
+
 ## Releasing
 
 1. Ensure all changes since last release are in each affected package's `[Unreleased]` section.
