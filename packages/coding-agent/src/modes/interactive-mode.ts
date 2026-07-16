@@ -789,7 +789,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			connectedServers: this.#orderedMcpStatusServers(this.#mcpConnectedServers),
 			failedServers: this.#orderedMcpStatusFailures(),
 		});
-		if (message) this.showStatus(message);
+		if (message) this.showStatus(message, { dim: false });
 	}
 
 	#trackMcpStatusServer(serverName: string): void {
