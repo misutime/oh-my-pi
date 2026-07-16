@@ -12,7 +12,7 @@
 
 ### Added
 
-- Codex MCP 配置提取支持 `enabled` 和 `cwd` 字段 (`cbc75df6`)
+- Codex MCP 配置提取支持 `enabled` 字段（`cwd` 部分已被上游以更完善方式实现）(`cbc75df6`)
 - 源码运行时（非编译版本）自动标记为开发版本 (`a888996f`)
 
 ### Changed
