@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+## [17.1.0] - 2026-07-24
+
+### Added
+
+- Added support for caller-owned `cachedContent` on Google Generative AI and Google Vertex AI `GenerateContent` options, allowing passing of opaque cache resource names.
+- Added Anthropic extra-usage reporting across CLI, interactive, and ACP usage endpoints, normalizing the authoritative `spend` payload into a 'Claude Extra Usage' USD row with accurate limit, remaining, and status details.
+- Added process-scoped OAuth account pools for trusted auth-broker clients via `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` to filter snapshots, updates, refreshes, and usage reports to selected OAuth identities.
+- Added opt-in Vercel AI Gateway automatic prompt caching for OpenAI Chat Completions, including support for cache anchors and cache lifetimes.
+- Added opt-in explicit prompt-cache controls for OpenAI GPT-5.6+ Responses and Chat Completions, supporting stable boundary selection, stateful Responses markers, and future GPT-5.x/6.x models.
+- Added support for forwarding `statefulResponses` through `streamSimple` to allow diagnostic callers to explicitly disable OpenAI Responses `previous_response_id` chaining.
+- Added native QwenCloud Token Plan support, including API-key login, model discovery, and an optional interactive console-Cookie prompt for quota reporting.
+- Added interactive Meta Model API key login and support for `MODEL_API_KEY` and `META_API_KEY` environment variables.
+- Added model-scoped usage health tracking and same-provider reselection for native coding-plan credential pools.
+
+### Fixed
+
+- Fixed AWS Bedrock cache checkpoints to use resolved model compatibility, falling back to the provider-default 5-minute cache for unsupported 1-hour retentions, emitting AWS-recommended explicit checkpoints for Nova models (Lite, Micro, Pro, Premier, Nova 2 Lite), and honoring configured checkpoint maxima.
+- Fixed Pi-native and compatibility-wrapper requests dropping cache controls required by `omp bench --cache` to preserve explicit prompt-cache affinity and allow disabling OpenAI Responses chaining.
+- Fixed outbound credential-pattern redaction running unconditionally; it is now opt-in via `configureCredentialRedaction` and disabled by default.
+- Fixed SuperGrok (`xai-oauth`) `/usage` reporting for unified-billing accounts by falling back to the default monthly limit and usage payload when credit usage percentages are absent.
+- Fixed sessions wedging with a `400 Invalid signature in thinking block` error when switching Anthropic-compatible providers by stripping signatures whose issuing provider differs from the target.
+- Fixed OAuth callback servers aborting login on premature invalid callbacks, and restricted `localhost` callback listeners to the IPv4 loopback interface.
+- Fixed Google Gemini CLI and Antigravity OAuth login hanging indefinitely during Cloud Code Assist project provisioning by introducing request timeouts, cancellation checks, and bounded polling.
+
+## [17.0.9] - 2026-07-23
+
 ### Added
 
 - Added Synthetic (synthetic.new) usage provider: `/usage` now reports the rolling 5-hour request limit and weekly credit quota via `GET /v2/quotas`, including per-tick regeneration rates in the window labels.
