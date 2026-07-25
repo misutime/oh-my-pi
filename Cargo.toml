@@ -242,7 +242,7 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }
 # Audio & Realtime Media
 # ──────────────────────────────────────────────────────────────────────────────
 audiopus_sys = { version = "0.2.2", features = ["static"] }
-maudio = { version = "0.1.6", features = ["generate-bindings"] }
+maudio = "0.1.6"
 opus = "0.3.1"
 webrtc = "0.17.2"
 
