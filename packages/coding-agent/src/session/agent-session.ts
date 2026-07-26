@@ -1288,6 +1288,11 @@ export class AgentSession {
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			sendCustomMessage: (message, options) => this.sendCustomMessage(message, options),
+			scheduleAgentContinuation: shouldContinue => {
+				this.#scheduleAgentContinue({
+					shouldContinue: shouldContinue ?? (() => this.agent.hasQueuedMessages()),
+				});
+			},
 			extractQueuedAdvisorCards: () => this.#extractQueuedAdvisorCards(),
 			dropPendingAdvisorCards: () => {
 				this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(message => !isAdvisorCard(message));
@@ -4670,9 +4675,11 @@ export class AgentSession {
 		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
 
 		// A user-initiated prompt (typed message or the `.`/`c` continue shortcut)
-		// re-enables advisor auto-resume that a prior user interrupt suppressed.
+		// re-enables advisor auto-resume that a prior user interrupt suppressed,
+		// and resets terminal fence state for the new user-run.
 		// Agent-initiated synthetic prompts (auto-continue, plan, reminders) do not.
 		if (options?.userInitiated ?? !options?.synthetic) {
+			this.#advisors.onUserPrompt();
 			this.#advisors.autoResumeSuppressed = false;
 			this.#planModeReminderCount = 0;
 			this.#planModeReminderAwaitingProgress = false;

@@ -214,6 +214,8 @@ export interface SessionAdvisorsHost {
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	sendCustomMessage(message: CustomMessagePayload, options?: AdvisorMessageDeliveryOptions): Promise<boolean>;
+	/** Schedule a continuation of the agent loop after the current prompt settles. */
+	scheduleAgentContinuation(shouldContinue?: () => boolean): void;
 	extractQueuedAdvisorCards(): CustomMessage[];
 	dropPendingAdvisorCards(): void;
 	preserveAdvisorCard(card: CustomMessage): void;
@@ -259,6 +261,11 @@ export class SessionAdvisors {
 	#advisorInterruptImmuneTurnStart: number | undefined;
 	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#advisorYieldQueueUnsubscribe: (() => void) | undefined;
+	#terminalFenceActive = false;
+	#fenceBatch: { note: string; severity: AdvisorSeverity | undefined; advisor: string | undefined }[] = [];
+	#terminalInterventionConsumed = false;
+	#userPromptGeneration = 0;
+	#fenceGeneration = 0;
 
 	constructor(host: SessionAdvisorsHost, options: SessionAdvisorsOptions) {
 		this.#host = host;
@@ -272,6 +279,14 @@ export class SessionAdvisors {
 		this.#transformProviderContext = options.transformProviderContext;
 		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
 	}
+	/**
+	 * Called on each user-initiated prompt to reset fence state for the new user-run.
+	 */
+	onUserPrompt(): void {
+		this.#userPromptGeneration++;
+		this.#terminalInterventionConsumed = false;
+	}
+
 
 	/** Delivers one completed primary turn to every live advisor. */
 	async onPrimaryTurnEnd(
@@ -280,6 +295,16 @@ export class SessionAdvisors {
 		signal?: AbortSignal,
 	): Promise<void> {
 		this.#advisorPrimaryTurnsCompleted++;
+
+		// Terminal turn: activate fence to collect interrupting notes
+		// instead of steering/preserving them immediately.
+		const isTerminal = willContinue === false;
+		if (isTerminal) {
+			this.#terminalFenceActive = true;
+			this.#fenceBatch = [];
+			this.#fenceGeneration = this.#userPromptGeneration;
+		}
+
 		for (const advisor of this.#advisors) {
 			if (advisor.runtime.disposed) continue;
 			try {
@@ -289,10 +314,80 @@ export class SessionAdvisors {
 			}
 		}
 		const syncBacklog = this.#host.settings.get("advisor.syncBacklog");
-		if (this.#advisors.length === 0 || syncBacklog === "off") return;
-		const threshold = Number.parseInt(syncBacklog, 10);
-		await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(30_000, threshold, signal)));
-	}
+		if (this.#advisors.length > 0) {
+			if (isTerminal) {
+				// Terminal turns MUST wait for catchup regardless of syncBacklog,
+				// otherwise fence notes are delivered before advisors finish processing.
+				// Threshold 1 means "resolve when backlog reaches 0" (fully caught up).
+				await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(30_000, 1, signal)));
+			} else if (syncBacklog !== "off") {
+				const threshold = Number.parseInt(syncBacklog, 10);
+				await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(30_000, threshold, signal)));
+			}
+		}
+
+		// Terminal turn: process collected fence batch
+		if (isTerminal) {
+			this.#terminalFenceActive = false;
+			if (this.#fenceBatch.length > 0 && !this.#terminalInterventionConsumed && this.#userPromptGeneration === this.#fenceGeneration) {
+				// cannotAutoTrigger mirrors #routeAdvice logic (plan mode, ACP defer)
+				const cannotAutoTrigger =
+					!this.#host.agent.state.isStreaming &&
+					this.#host.clientBridge()?.deferAgentInitiatedTurns === true &&
+					!this.#host.allowAgentInitiatedTurns();
+				if (this.#host.planModeState()?.enabled || cannotAutoTrigger) {
+					// Preserve each note as visible card
+					for (const entry of this.#fenceBatch) {
+						const notes: AdvisorNote[] = [{ note: entry.note, severity: entry.severity, advisor: entry.advisor }];
+						this.#host.preserveAdvisorCard({
+							role: "custom",
+							customType: "advisor",
+							content: formatAdvisorBatchContent(notes),
+							display: true,
+							attribution: "agent",
+							details: { notes } satisfies AdvisorMessageDetails,
+							timestamp: Date.now(),
+						});
+					}
+				} else {
+					// Steer the batch into the agent's steering queue.
+					// The agent loop polls steering after emitTurnEnd, so no explicit
+					// continuation is needed.
+					const notes: AdvisorNote[] = this.#fenceBatch.map(entry => ({
+						note: entry.note,
+						severity: entry.severity,
+						advisor: entry.advisor,
+					}));
+					const content = formatAdvisorBatchContent(this.#fenceBatch);
+					const details = { notes } satisfies AdvisorMessageDetails;
+					void this.#host
+						.sendCustomMessage(
+							{ customType: "advisor", content, display: true, attribution: "agent", details },
+							{ deliverAs: "steer" },
+						)
+						.catch(err => logger.debug("advisor fence delivery failed", { err: String(err) }));
+					this.#terminalInterventionConsumed = true;
+				}
+			} else {
+				// Generation changed (new user prompt) or intervention already consumed this
+				// user-run — preserve each note as visible card to avoid cross-run interference.
+				for (const entry of this.#fenceBatch) {
+					const notes: AdvisorNote[] = [{ note: entry.note, severity: entry.severity, advisor: entry.advisor }];
+					this.#host.preserveAdvisorCard({
+						role: "custom",
+						customType: "advisor",
+						content: formatAdvisorBatchContent(notes),
+						display: true,
+						attribution: "agent",
+						details: { notes } satisfies AdvisorMessageDetails,
+						timestamp: Date.now(),
+					});
+				}
+			}
+			this.#fenceBatch = [];
+		}
+		}
+
 
 	/** Rebuilds live advisors when role assignments alter their resolved runtime inputs. */
 	onModelRolesChanged(): void {
@@ -824,9 +919,21 @@ export class SessionAdvisors {
 	}
 
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity): void {
+		// Emission guard: check BEFORE any routing so fence-collected notes are also filtered.
 		if (!advisor.emissionGuard.accept(note)) {
 			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
 			return;
+		}
+		// Fence active during terminal turn: collect interrupting notes into the batch
+		// instead of routing them through the delivery channel.
+		if (this.#terminalFenceActive) {
+			if (isInterruptingSeverity(severity)) {
+				const deliveredNote = annotateForStaleness(note, advisor.runtime.hasFreshBacklog);
+				const source = advisor.slug ? advisor.name : undefined;
+				this.#fenceBatch.push({ note: deliveredNote, severity, advisor: source });
+				return;
+			}
+			// Nits fall through to existing aside path
 		}
 		// When newer primary turns already arrived while the advisor model was
 		// processing this batch, the advice was generated without seeing them.
