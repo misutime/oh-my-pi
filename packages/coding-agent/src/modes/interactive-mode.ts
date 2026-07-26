@@ -402,6 +402,10 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 			renderItem: session => {
 				const displayId = formatTaskId(session.id);
 				let line = `${dot} ${theme.fg("accent", theme.bold(displayId))}`;
+				const agent = session.agent?.trim();
+				if (agent && agent !== "task") {
+					line += ` ${theme.fg("dim", `${theme.format.bracketLeft}${agent}${theme.format.bracketRight}`)}`;
+				}
 				const description = session.description?.trim() || session.progress?.description?.trim();
 				if (description) {
 					const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(displayId) - 10);

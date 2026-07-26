@@ -21,7 +21,8 @@ The user is stuck and needs expert help.
 ### Instructions
 
 1. Collect additional context as needed: recent errors, what was attempted, relevant code.
-2. Use the `task` tool with `agent: "shifu"` to spawn exactly **1 shifu agent**.
+
+2. Use the `task` tool with `agent: "shifu"` and a `tasks` array. Create exactly **1 task item**: `tasks: [{ agent: "shifu", task: "…" }]`. NEVER write `task("shifu")` — that sets the task description, not the agent type.
 3. The shifu assignment MUST include:
    - The problem as stated{{#if problem}} above{{/if}}
    - What you know has been tried so far
