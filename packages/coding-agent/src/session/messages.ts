@@ -1077,13 +1077,22 @@ registerMessageCacheInvalidator(message => {
 	convertGeneration++;
 });
 
+/**
+ * Advisor-card content whose LLM rendering contains no substantive text.
+ * Empty strings, whitespace-only strings, empty arrays, and arrays with no
+ * non-whitespace text blocks are all considered effectively empty — sending
+ * any of these to the provider as a developer message triggers hallucinatory
+ * inference ("The user wants me to...").
+ */
+function isEffectivelyEmpty(content: unknown): boolean {
+	if (typeof content === "string") return content.trim().length === 0;
+	if (!Array.isArray(content)) return false;
+	if (content.length === 0) return true;
+	return content.every(block => block.type !== "text" || block.text.trim().length === 0);
+}
+
 /** Convert one message to its LLM fragment. `interruptedNext` is true only for an
  *  assistant turn immediately followed by its interrupted-thinking marker. */
-
-function isEffectivelyEmpty(content: unknown): boolean {
-	if (typeof content !== "string") return false;
-	return content.trim().length === 0;
-}
 function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 	switch (m.role) {
 		case "bashExecution":

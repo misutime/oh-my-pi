@@ -146,10 +146,18 @@ describe("convertToLlm", () => {
 			{
 				role: "custom",
 				customType: "advisor",
-				content: '<advisory guidance="weigh">real concern</advisory>',
+				content: [],
 				display: true,
 				attribution: "agent",
 				timestamp: 3,
+			},
+			{
+				role: "custom",
+				customType: "advisor",
+				content: '<advisory guidance="weigh">real concern</advisory>',
+				display: true,
+				attribution: "agent",
+				timestamp: 4,
 			},
 		];
 		const llm = convertToLlm(messages);
