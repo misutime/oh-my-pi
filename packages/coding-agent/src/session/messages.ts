@@ -1079,6 +1079,11 @@ registerMessageCacheInvalidator(message => {
 
 /** Convert one message to its LLM fragment. `interruptedNext` is true only for an
  *  assistant turn immediately followed by its interrupted-thinking marker. */
+
+function isEffectivelyEmpty(content: unknown): boolean {
+	if (typeof content !== "string") return false;
+	return content.trim().length === 0;
+}
 function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 	switch (m.role) {
 		case "bashExecution":
@@ -1144,7 +1149,12 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 			}
 			return out;
 		}
+
 		case "custom": {
+			// Advisor cards with no substantive content should never reach the LLM.
+			// An empty advisor message in the prompt triggers the primary model to
+			// hallucinate user intent ("The user wants me to...").
+			if (m.customType === "advisor" && isEffectivelyEmpty(m.content)) return [];
 			if (!isCustomMessageContent(m.content)) return [];
 			if (isUserInvokedSkillPrompt(m)) {
 				return [

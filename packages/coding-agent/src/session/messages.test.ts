@@ -124,6 +124,39 @@ describe("convertToLlm", () => {
 			"thinking",
 		]);
 	});
+
+	it("drops empty advisor cards from the LLM context to prevent hallucination", () => {
+		const messages: AgentMessage[] = [
+			{
+				role: "custom",
+				customType: "advisor",
+				content: "",
+				display: true,
+				attribution: "agent",
+				timestamp: 1,
+			},
+			{
+				role: "custom",
+				customType: "advisor",
+				content: "   \t\n  ",
+				display: true,
+				attribution: "agent",
+				timestamp: 2,
+			},
+			{
+				role: "custom",
+				customType: "advisor",
+				content: '<advisory guidance="weigh">real concern</advisory>',
+				display: true,
+				attribution: "agent",
+				timestamp: 3,
+			},
+		];
+		const llm = convertToLlm(messages);
+		// Only the non-empty advisor card reaches the LLM
+		expect(llm.length).toBe(1);
+		expect(llm[0]?.role).toBe("developer");
+	});
 });
 
 function settledAssistant(text: string): AssistantMessage {
