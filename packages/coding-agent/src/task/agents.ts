@@ -12,6 +12,7 @@ import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { t
 import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
+import shifuMd from "../prompts/agents/shifu.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking";
 
@@ -43,6 +44,7 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "scout.md", template: scoutMd },
 	{ fileName: "designer.md", template: designerMd },
+	{ fileName: "shifu.md", template: shifuMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "librarian.md", template: librarianMd },
 	{

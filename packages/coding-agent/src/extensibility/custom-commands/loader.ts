@@ -16,6 +16,7 @@ import * as PiCodingAgent from "../../index";
 import * as typebox from "../typebox";
 import { GreenCommand } from "./bundled/ci-green";
 import { ReviewCommand } from "./bundled/review";
+import { ShifuCommand } from "./bundled/shifu";
 import type {
 	CustomCommand,
 	CustomCommandAPI,
@@ -162,6 +163,12 @@ function loadBundledCommands(sharedApi: CustomCommandAPI): LoadedCustomCommand[]
 		path: "bundled:review",
 		resolvedPath: "bundled:review",
 		command: new ReviewCommand(sharedApi),
+		source: "bundled",
+	});
+	bundled.push({
+		path: "bundled:shifu",
+		resolvedPath: "bundled:shifu",
+		command: new ShifuCommand(sharedApi),
 		source: "bundled",
 	});
 
