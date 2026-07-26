@@ -406,6 +406,11 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 				if (agent && agent !== "task") {
 					line += ` ${theme.fg("dim", `${theme.format.bracketLeft}${agent}${theme.format.bracketRight}`)}`;
 				}
+				const fullModel = session.progress?.resolvedModel?.trim();
+				if (fullModel) {
+					const shortModel = fullModel.includes("/") ? fullModel.slice(fullModel.indexOf("/") + 1) : fullModel;
+					line += `${theme.sep.dot}${theme.fg("dim", truncateToWidth(replaceTabs(shortModel), TRUNCATE_LENGTHS.SHORT))}`;
+				}
 				const description = session.description?.trim() || session.progress?.description?.trim();
 				if (description) {
 					const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(displayId) - 10);
