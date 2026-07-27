@@ -7905,6 +7905,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#updateStmt.finalize();
 		this.#deleteStmt.finalize();
 		this.#deleteIfMatchesStmt.finalize();
+		this.#updateIfMatchesStmt.finalize();
 		this.#deleteByProviderStmt.finalize();
 		this.#hardDeleteStmt.finalize();
 		this.#getCacheStmt.finalize();
@@ -7923,6 +7924,13 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#updateUsageHistoryStmt.finalize();
 		this.#insertUsageCostStmt.finalize();
 		this.#listUsageCostsStmt.finalize();
+		this.#updateIfMatchesWithLeaseStmt.finalize();
+		this.#deleteIfMatchesWithLeaseStmt.finalize();
+		this.#deleteCachePrefixStmt.finalize();
+		this.#acquireCredentialRefreshLeaseStmt.finalize();
+		this.#getCredentialRefreshLeaseStmt.finalize();
+		this.#renewCredentialRefreshLeaseStmt.finalize();
+		this.#releaseCredentialRefreshLeaseStmt.finalize();
 		this.#db.close();
 	}
 }

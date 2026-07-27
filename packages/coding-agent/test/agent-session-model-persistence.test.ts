@@ -32,9 +32,9 @@ describe("AgentSession model persistence", () => {
 		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.yml"));
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
 		sharedAuthStorage.close();
-		sharedDir.removeSync();
+		await sharedDir.remove();
 	});
 
 	beforeEach(() => {
