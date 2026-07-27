@@ -401,8 +401,10 @@ export class AdvisorRuntime {
 			this.#backlog++;
 			this.#notifyWaiters();
 			void this.#drain();
+			return reviewId;
 		}
-		return reviewId;
+		// No delta to process — don't leak a review ID that will never be cleaned.
+		return 0;
 	}
 
 	isReviewActive(reviewId: number): boolean {
@@ -902,7 +904,8 @@ export class AdvisorRuntime {
 					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
 					if (turnError) throw turnError;
 					success = true;
-							batchCompleted = true;
+					this.#failing = false;
+					batchCompleted = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
 					this.#droppedBacklogs = 0;

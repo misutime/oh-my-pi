@@ -845,6 +845,12 @@ export class SessionAdvisors {
 				},
 				notifyQuotaExhausted: () => {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "quota_exhausted" });
+					// Clear terminal review IDs so the TUI spinner stops — the advisor
+					// is paused and cannot complete reviews until quota recovers.
+					advisorRef.pendingTerminalReviewIds.clear();
+					if (!this.#advisors.some(a => a.pendingTerminalReviewIds.size > 0)) {
+						void this.#host.emitSessionEvent({ type: "advisor_reviews_changed", active: false });
+					}
 					this.#host.emitNotice(
 						"warning",
 						`Advisor "${advisorName}" quota exhausted — pausing until reset.`,
