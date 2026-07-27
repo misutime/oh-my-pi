@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { resolveAdvisorRoleSelection, resolveModelRoleValue } from "../../config/model-resolver";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { resolveLocalRoot } from "../../internal-urls";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { extractImagePathFromText } from "../../modes/components/custom-editor";
@@ -175,9 +177,14 @@ export class InputController {
 	#focusedPasteListenerInstalled = false;
 	#btwBranchListenerInstalled = false;
 	#btwCopyListenerInstalled = false;
-	// Tap counter for the double-← gesture; reset whenever a quiet gap
-	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
-	// #detectLeftDoubleTap.
+	#tabModelToggleListenerInstalled = false;
+// Tap counter for the double-← gesture; reset whenever a quiet gap
+// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
+// #detectLeftDoubleTap.
+/** Saved (model, sessionId) pair for Tab model switching. The session id
+ *  guards against stale cache across session switches within the same
+ *  InteractiveMode — a change clears the tracker so the next Tab starts fresh. */
+#preTabToggleModel: { model: Model; sessionId: string } | null = null;
 	#leftTapCount = 0;
 	// Sequential index for `local://paste-N.md` references created by the large-paste
 	// flow. Seeded from 0 and bumped past existing paste files.
@@ -273,6 +280,17 @@ export class InputController {
 				if (!focused || focused === this.ctx.editor || !hasPasteText(focused)) return undefined;
 				if (!this.ctx.keybindings.matches(data, "app.clipboard.pasteImage")) return undefined;
 				void this.handleImagePaste();
+				return { consume: true };
+			});
+		}
+		if (!this.#tabModelToggleListenerInstalled) {
+			this.#tabModelToggleListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (!matchesKey(data, "tab")) return undefined;
+				if (this.ctx.focusedAgentId) return undefined;
+				if (this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
+				if (this.ctx.editor.getText().trim()) return undefined;
+				void this.#toggleDefaultAdvisorModel();
 				return { consume: true };
 			});
 		}
@@ -1865,7 +1883,77 @@ export class InputController {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
 	}
+	/** Toggle between the advisor model and the pre-toggle model for the current
+	 *  session only (settings are unchanged). Tab on an empty editor triggers this.
+	 *
+	 *  Uses a tracker (`#preTabToggleModel`) instead of `resolveRoleModel("default")`
+	 *  because the "default" role resolver falls back to the current model when
+	 *  `modelRoles.default` is unset — after switching to advisor it would resolve
+	 *  to advisor itself, making the return trip impossible. */
+	async #toggleDefaultAdvisorModel(): Promise<void> {
+		try {
+			const currentModel = this.ctx.session.model;
+			if (!currentModel) {
+				this.ctx.showStatus("No model selected");
+				return;
+			}
 
+			// Require an explicit advisor model setting — `resolveAdvisorRoleSelection`
+			// falls back to the slow chain, which would toggle even when unconfigured.
+			if (!this.ctx.settings.getModelRole("advisor")) {
+				this.ctx.showStatus("No advisor model configured");
+				return;
+			}
+
+			const advisorSelection = resolveAdvisorRoleSelection(
+				this.ctx.settings,
+				this.ctx.session.modelRegistry.getAvailable(),
+			);
+			if (!advisorSelection) {
+				this.ctx.showStatus("No advisor model configured");
+				return;
+			}
+
+			if (modelsAreEqual(currentModel, advisorSelection.model)) {
+				// On advisor — switch back to the other model.
+				const saved = this.#preTabToggleModel;
+				const currentSessionId = this.ctx.sessionManager.getSessionId();
+				if (saved && saved.sessionId === currentSessionId) {
+					await this.ctx.session.setModelTemporary(saved.model, undefined, { ephemeral: true });
+					this.ctx.showStatus("Switched back to previous model");
+				} else {
+					this.ctx.showStatus("No previous model to toggle back to");
+				}
+			} else {
+				// Not on advisor — switch to advisor.
+				// Resolve the default-model side once and freeze it, so the toggle is
+				// always between the same two models.
+				if (!this.#preTabToggleModel || this.#preTabToggleModel.sessionId !== this.ctx.sessionManager.getSessionId()) {
+					const defaultModelStr = this.ctx.settings.getModelRole("default");
+					const otherModel = defaultModelStr
+						? resolveModelRoleValue(defaultModelStr, this.ctx.session.modelRegistry.getAvailable(), {
+								settings: this.ctx.settings,
+							}).model ?? currentModel
+						: currentModel;
+					this.#preTabToggleModel = {
+						model: otherModel,
+						sessionId: this.ctx.sessionManager.getSessionId(),
+					};
+				}
+				await this.ctx.session.setModelTemporary(
+					advisorSelection.model,
+					advisorSelection.thinkingLevel,
+					{ ephemeral: true },
+				);
+				this.ctx.showStatus("Switched to advisor model");
+			}
+
+			this.ctx.statusLine.invalidate();
+			this.ctx.updateEditorBorderColor();
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
 	toggleToolOutputExpansion(): void {
 		this.setToolsExpanded(!this.ctx.toolOutputExpanded);
 	}
