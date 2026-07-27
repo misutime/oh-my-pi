@@ -1296,9 +1296,14 @@ export class EventController {
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
-			this.ctx.loadingAnimation.stop();
-			this.ctx.loadingAnimation = undefined;
-			this.ctx.statusContainer.disposeChildren();
+			if (this.ctx.session.hasActiveAdvisorReviews?.()) {
+				this.ctx.ensureLoadingAnimation();
+				this.ctx.loadingAnimation!.setMessage("Advisor 审查中…" + interruptHint());
+			} else {
+				this.ctx.loadingAnimation.stop();
+				this.ctx.loadingAnimation = undefined;
+				this.ctx.statusContainer.disposeChildren();
+			}
 		}
 		if (this.ctx.streamingComponent) {
 			this.ctx.chatContainer.removeChild(this.ctx.streamingComponent);
