@@ -311,8 +311,10 @@ export class SessionAdvisors {
 				if (advisor.runtime.disposed) continue;
 				try {
 					const reviewId = advisor.runtime.onTurnEnd(messages, { willContinue });
-					advisor.pendingTerminalReviewIds.add(reviewId);
-					advisor.pendingTerminalReviewGeneration = this.#userPromptGeneration;
+					if (reviewId !== 0) {
+						advisor.pendingTerminalReviewIds.add(reviewId);
+						advisor.pendingTerminalReviewGeneration = this.#userPromptGeneration;
+					}
 				} catch (error) {
 					logger.warn("advisor onTurnEnd threw; delta dropped", { advisor: advisor.name, err: String(error) });
 				}
@@ -848,6 +850,12 @@ export class SessionAdvisors {
 						`Advisor "${advisorName}" quota exhausted — pausing until reset.`,
 						"advisor",
 					);
+				},
+				onBatchComplete: (reviewIds) => {
+					for (const id of reviewIds) advisorRef.pendingTerminalReviewIds.delete(id);
+					if (!this.#advisors.some(a => a.pendingTerminalReviewIds.size > 0)) {
+						void this.#host.emitSessionEvent({ type: "advisor_reviews_changed", active: false });
+					}
 				},
 			});
 

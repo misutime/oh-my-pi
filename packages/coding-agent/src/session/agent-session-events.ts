@@ -50,6 +50,7 @@ export type AgentSessionEvent =
 	| { type: "ttsr_triggered"; rules: Rule[] }
 	| { type: "todo_reminder"; todos: TodoItem[]; attempt: number; maxAttempts: number }
 	| { type: "todo_auto_clear" }
+	| { type: "advisor_reviews_changed"; active: boolean }
 	| { type: "irc_message"; message: CustomMessage }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
 	| {

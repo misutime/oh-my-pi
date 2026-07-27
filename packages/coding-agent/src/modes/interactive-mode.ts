@@ -1094,6 +1094,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
 				void this.#handleGoalSessionEvent(event);
+				if (event.type === "advisor_reviews_changed" && !event.active && !this.session.isStreaming) {
+					this.#stopLoadingAnimation?.(true);
+				}
 			}),
 			onStatusLineSessionAccentChanged(() => {
 				this.#syncStatusLineSettings();

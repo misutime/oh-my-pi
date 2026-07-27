@@ -218,6 +218,7 @@ export class EventController {
 				}
 				this.ctx.ui.resetDisplay();
 			},
+			advisor_reviews_changed: async () => {},
 			goal_updated: async () => {},
 		} satisfies AgentSessionEventHandlers;
 	}

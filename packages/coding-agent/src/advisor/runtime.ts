@@ -70,6 +70,9 @@ export interface AdvisorRuntimeHost {
 	): Promise<boolean | undefined> | boolean | undefined;
 	/** Called after a successful advisor turn so the host can finish fallback lifecycle reporting. */
 	onTurnSuccess?(): Promise<void> | void;
+
+	/** Called when a batch of reviews is truly complete (not retried/re-queued). Carries the reviewIds. */
+	onBatchComplete?(reviewIds: Set<number>): void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
 	/** Signal that the advisor paused on a quota/rate-limit after host-level
@@ -867,6 +870,7 @@ export class AdvisorRuntime {
 				if (this.disposed || batch === null) {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
 					this.#notifyWaiters();
+					this.host.onBatchComplete?.(reviewIds);
 					continue;
 				}
 
@@ -878,6 +882,7 @@ export class AdvisorRuntime {
 				// orphan failures into the next successful run's context.
 				const messageSnapshot = this.agent.state.messages.length;
 				const contextWasFresh = resetContext || recoveringOverflow || messageSnapshot === 0;
+				let batchCompleted = false;
 				try {
 					// Reset the host's per-update advisor state (one-advise-per-update
 					// gate) before each model cycle so the new batch starts fresh.
@@ -897,7 +902,7 @@ export class AdvisorRuntime {
 					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
 					if (turnError) throw turnError;
 					success = true;
-					this.#failing = false;
+					batchCompleted = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
 					this.#droppedBacklogs = 0;
@@ -1015,6 +1020,7 @@ export class AdvisorRuntime {
 						this.#clearSeenContext();
 						this.#noteDroppedBacklog(err);
 						success = true;
+						batchCompleted = true;
 					} else if (contextOverflow) {
 						this.#clearAdvisorContextAtCurrentCursor();
 						if (contextWasFresh) {
@@ -1024,6 +1030,7 @@ export class AdvisorRuntime {
 							logger.warn("advisor update overflowed a fresh context; dropping bounded batch");
 							this.#notifyFailureOnce(err);
 							success = true;
+							batchCompleted = true;
 						} else {
 							// Retry once against the fresh advisor context, using only the same
 							// bounded raw batch. Pending updates remain queued behind it.
@@ -1050,6 +1057,7 @@ export class AdvisorRuntime {
 							this.#clearSeenContext();
 							this.#noteDroppedBacklog(err);
 							success = true;
+							batchCompleted = true;
 						} else {
 							this.#pending.unshift({
 								text: batch,
@@ -1071,6 +1079,7 @@ export class AdvisorRuntime {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
 					this.#notifyWaiters();
 				}
+				if (batchCompleted) this.host.onBatchComplete?.(reviewIds);
 			}
 		} finally {
 			this.#activeReviewIds.clear();
