@@ -858,8 +858,12 @@ export class SessionAdvisors {
 					);
 				},
 				onBatchComplete: (reviewIds) => {
+					logger.debug("advisor onBatchComplete called", { slug, reviewIds: [...reviewIds], pendingBefore: advisorRef.pendingTerminalReviewIds.size });
 					for (const id of reviewIds) advisorRef.pendingTerminalReviewIds.delete(id);
-					if (!this.#advisors.some(a => a.pendingTerminalReviewIds.size > 0)) {
+					const anyPending = this.#advisors.some(a => a.pendingTerminalReviewIds.size > 0);
+					logger.debug("advisor onBatchComplete after clear", { slug, anyPending });
+					if (!anyPending) {
+						logger.debug("advisor emitting advisor_reviews_changed inactive");
 						void this.#host.emitSessionEvent({ type: "advisor_reviews_changed", active: false });
 					}
 				},
@@ -945,12 +949,12 @@ export class SessionAdvisors {
 		const source = advisor.slug ? advisor.name : undefined;
 
 		// Terminal review delivery: per-note delivery as each arrives from the advisor.
-		// Checks generation match so a new user prompt routes normally instead.
 		if (
 			advisor.pendingTerminalReviewIds.size > 0 &&
 			[...advisor.pendingTerminalReviewIds].some(id => advisor.runtime.isReviewActive(id)) &&
 			this.#userPromptGeneration === advisor.pendingTerminalReviewGeneration
 		) {
+			logger.debug("advisor routeAdvice terminal path", { advisor: advisor.name, pendingSize: advisor.pendingTerminalReviewIds.size });
 			const notes: AdvisorNote[] = [{ note: deliveredNote, severity, advisor: source }];
 			const content = formatAdvisorBatchContent(notes);
 			const details = { notes } satisfies AdvisorMessageDetails;

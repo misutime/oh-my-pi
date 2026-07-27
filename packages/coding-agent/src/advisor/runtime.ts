@@ -840,9 +840,12 @@ export class AdvisorRuntime {
 			logger.warn("advisor failure notification failed", { err: String(notifyErr) });
 		}
 	}
-
 	async #drain(): Promise<void> {
-		if (this.#busy) return;
+		if (this.#busy) {
+			logger.debug("advisor drain skipped (busy)", { pendingSize: this.#pending.length });
+			return;
+		}
+		logger.debug("advisor drain start", { pendingSize: this.#pending.length });
 		this.#busy = true;
 		try {
 			while (!this.disposed && this.#pending.length) {
@@ -890,7 +893,9 @@ export class AdvisorRuntime {
 					// gate) before each model cycle so the new batch starts fresh.
 					this.host.beginAdvisorUpdate?.();
 					this.#activeReviewIds = reviewIds;
+					logger.debug("advisor prompt start", { reviewIds: [...reviewIds], batchLen: batch.length });
 					await this.agent.prompt(batch);
+					logger.debug("advisor prompt done", { reviewIds: [...reviewIds] });
 					// Agent.#runLoop catches provider/stream failures internally and
 					// resolves prompt() cleanly with stopReason: "error". Treat that
 					// as a failed turn so endpoint rejections trip the retry path.
@@ -918,6 +923,7 @@ export class AdvisorRuntime {
 						}
 					}
 				} catch (err) {
+					logger.debug("advisor prompt error", { reviewIds: [...reviewIds], err: String(err).slice(0, 200) });
 					// reset()/dispose() aborts the in-flight prompt; treat it as a
 					// reset, not a transient failure — drop the stale batch.
 					if (this.#epoch !== epoch) continue;
@@ -1089,6 +1095,7 @@ export class AdvisorRuntime {
 		} finally {
 			this.#activeReviewIds.clear();
 			this.#busy = false;
+			logger.debug("advisor drain end", { pendingSize: this.#pending.length });
 		}
 	}
 }

@@ -1094,7 +1094,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
 				void this.#handleGoalSessionEvent(event);
+				if (event.type === "advisor_reviews_changed") {
+					logger.debug("advisor_reviews_changed event received in TUI", { active: event.active, isStreaming: this.session.isStreaming });
+				}
 				if (event.type === "advisor_reviews_changed" && !event.active && !this.session.isStreaming) {
+					logger.debug("advisor reviews complete, stopping loading animation");
 					this.#stopLoadingAnimation?.(true);
 				}
 			}),
