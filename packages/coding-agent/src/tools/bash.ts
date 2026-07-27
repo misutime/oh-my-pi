@@ -230,9 +230,17 @@ function findBashApprovalPatternRule(
 	return rules.find(rule => bashApprovalRuleMatches(command, rule));
 }
 
-async function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {
+async function saveBashOriginalArtifact(
+	session: ToolSession,
+	originalText: string,
+	existingId?: string,
+	existingPath?: string,
+): Promise<string | undefined> {
 	try {
-		const alloc = await session.allocateOutputArtifact?.("bash-original");
+		const alloc =
+			existingId !== undefined && existingPath !== undefined
+				? { id: existingId, path: existingPath }
+				: await session.allocateOutputArtifact?.("bash-original");
 		if (!alloc?.path || !alloc.id) return undefined;
 		await Bun.write(alloc.path, originalText);
 		return alloc.id;
@@ -770,7 +778,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 							latestText = tailBuffer.text();
 							void reportProgress(latestText, { async: { state: "running", jobId, type: "bash" } });
 						},
-						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
+						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText, artifactId, artifactPath),
 					});
 					const wallTimeMs = performance.now() - wallTimeStart;
 					const finalResult = await this.#buildCompletedResult(result, options.timeoutSec, {
@@ -1388,7 +1396,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 					artifactPath,
 					artifactId,
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
-					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
+					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText, artifactId, artifactPath),
 				});
 		const wallTimeMs = performance.now() - wallTimeStart;
 		if (result.cancelled) {

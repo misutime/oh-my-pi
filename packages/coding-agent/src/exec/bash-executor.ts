@@ -556,6 +556,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		// raw stream for the minimized text, persist the original as a session
 		// artifact, and splice an `artifact://<id>` footer into the visible text so
 		// the agent can retrieve the raw bytes losslessly.
+		// Flush + close the sink's file writer first so `onMinimizedSave` can
+		// safely overwrite the same artifact path without a sharing violation.
+		await sink.dispose();
 		const minimized = winner.result.minimized;
 		if (minimized && minimized.text !== minimized.originalText) {
 			sink.replace(minimized.text);
