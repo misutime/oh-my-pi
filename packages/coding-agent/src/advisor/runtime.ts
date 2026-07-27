@@ -270,6 +270,37 @@ function fingerprintMessage(message: AgentMessage): bigint | undefined {
 	}
 }
 
+
+/**
+ * Tool names considered safe/read-only for the `safe_tools` advisor trigger mode.
+ * Turns whose delta contains ONLY these tools (or no tools at all) skip advisor review.
+ * Any tool call NOT in this set — or any MCP/custom tool — triggers review.
+ */
+const SAFE_TOOL_WHITELIST: Record<string, true> = {
+	read: true,
+	grep: true,
+	glob: true,
+	lsp: true,
+	web_search: true,
+	todo: true,
+	hub: true,
+	ask: true,
+};
+
+function hasNonWhitelistToolCall(rawMessages: AgentMessage[]): boolean {
+	for (const msg of rawMessages) {
+		if (msg.role !== "assistant") continue;
+		const blocks = msg.content;
+		if (!Array.isArray(blocks)) continue;
+		for (const block of blocks) {
+			if (block.type !== "toolCall") continue;
+			// MCP tools (mcp__*) are never whitelisted — external, potentially mutating.
+			if (block.name.startsWith("mcp__")) return true;
+			if (!(block.name in SAFE_TOOL_WHITELIST)) return true;
+		}
+	}
+	return false;
+}
 export class AdvisorRuntime {
 	#lastCount = 0;
 	/**
@@ -365,15 +396,17 @@ export class AdvisorRuntime {
 	 * @param messages - Live primary transcript snapshot (defaults to `snapshotMessages()`).
 	 * @param opts.willContinue - When `true` the primary is mid-turn (more tool-call
 	 *   steps will follow). The rendered heading is tagged `[in progress]` so the
-	 *   advisor knows to withhold critique on partial work. The flag is carried on
-	 *   the delta and forwarded to the reprime path so it is never silently dropped.
+	 *   advisor knows to withhold critique on partial work.
+	 * @param opts.triggerMode - `"always"` (default) reviews every turn.
+	 *   `"safe_tools"` skips turns whose delta contains only whitelisted tool calls
+	 *   (read, grep, glob, lsp, web_search, todo, hub, ask) or no tool calls at all.
 	 */
-	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean }): number {
+	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean; triggerMode?: string }): number {
 		if (this.disposed || this.#quotaExhausted || this.#halted) return 0;
-		const reviewId = ++this.#nextReviewId;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
 		const wip = opts?.willContinue ?? false;
+		const triggerMode = opts?.triggerMode ?? "always";
 		let rendered: Omit<PendingDelta, "turns" | "overflowRecovery" | "reviewIds"> | null = null;
 		// #renderDelta advances the cursor/prefix/dedup state before formatting
 		// can throw; snapshot them so a formatter bug loses NOTHING — the next
@@ -396,15 +429,18 @@ export class AdvisorRuntime {
 			this.#wakeAllWaiters();
 			logger.warn("advisor delta render failed", { err: String(err) });
 		}
-		if (rendered) {
-			this.#pending.push({ ...rendered, turns: 1, reviewIds: new Set([reviewId]) });
-			this.#backlog++;
-			this.#notifyWaiters();
-			void this.#drain();
-			return reviewId;
+		if (!rendered) return 0;
+		// safe_tools gate: skip review when delta contains only whitelisted tools.
+		// Cursor was already advanced by #renderDelta above — no observe() needed.
+		if (triggerMode === "safe_tools" && !hasNonWhitelistToolCall(rendered.rawMessages)) {
+			return 0;
 		}
-		// No delta to process — don't leak a review ID that will never be cleaned.
-		return 0;
+		const reviewId = ++this.#nextReviewId;
+		this.#pending.push({ ...rendered, turns: 1, reviewIds: new Set([reviewId]) });
+		this.#backlog++;
+		this.#notifyWaiters();
+		void this.#drain();
+		return reviewId;
 	}
 
 	isReviewActive(reviewId: number): boolean {

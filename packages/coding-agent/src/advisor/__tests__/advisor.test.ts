@@ -4591,6 +4591,297 @@ describe("advisor", () => {
 		});
 	});
 
+
+	describe("safe_tools trigger mode", () => {
+		it("skips pure text turns — no prompt, backlog stays 0, reviewId 0", async () => {
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => { promptInputs.push(input); },
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "hello", timestamp: 1 } as AgentMessage,
+				{ role: "assistant", content: [{ type: "text", text: "hi there" }], timestamp: 2 } as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await Bun.sleep(0);
+			expect(reviewId).toBe(0);
+			expect(promptInputs).toHaveLength(0);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("skips turns with only whitelist tool calls (read, grep)", async () => {
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => { promptInputs.push(input); },
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "find foo", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "c1", name: "grep", arguments: { pattern: "foo" } },
+						{ type: "toolCall", id: "c2", name: "read", arguments: { path: "bar.ts" } },
+					],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await Bun.sleep(0);
+			expect(reviewId).toBe(0);
+			expect(promptInputs).toHaveLength(0);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("triggers review when delta has a non-whitelist tool call (edit)", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "fix it", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "edit", arguments: { path: "x.ts" } }],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await settleUntil(() => promptInputs.length >= 1 && runtime.backlog === 0);
+			expect(reviewId).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		it("triggers when mixed whitelist + non-whitelist tools (read + edit)", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "fix it", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "c1", name: "read", arguments: { path: "x.ts" } },
+						{ type: "toolCall", id: "c2", name: "edit", arguments: { path: "x.ts" } },
+					],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await promptDone;
+			expect(reviewId).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+		});
+
+		it("does not replay skipped turns in the next delta after a skip", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			// Turn 1: read-only — skipped
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "read foo", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "foo.ts" } }],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await Bun.sleep(0);
+			expect(promptInputs).toHaveLength(0);
+
+			// Turn 2: non-whitelist — should trigger, delta must NOT include turn 1
+			messages.push(
+				{ role: "user", content: "edit it", timestamp: 3 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c2", name: "edit", arguments: { path: "foo.ts" } }],
+					timestamp: 4,
+				} as AgentMessage,
+			);
+			runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await promptDone;
+
+			expect(promptInputs).toHaveLength(1);
+			// Delta must contain turn 2 ("edit it") but NOT turn 1 ("read foo")
+			expect(promptInputs[0]).toContain("edit it");
+			expect(promptInputs[0]).not.toContain("read foo");
+		});
+
+		it("triggers for MCP tools regardless of name", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "query db", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "mcp__postgres__query", arguments: {} }],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await promptDone;
+			expect(reviewId).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+		});
+
+		it("triggers for unknown/custom tools (default non-whitelist)", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "deploy", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "custom_deploy", arguments: {} }],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "safe_tools" });
+			await promptDone;
+			expect(reviewId).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+		});
+
+		it("always mode triggers for all tool calls including whitelist", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "read foo", timestamp: 1 } as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "foo.ts" } }],
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages, { triggerMode: "always" });
+			await promptDone;
+			expect(reviewId).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+		});
+
+		it("default (no triggerMode) behaves like always", async () => {
+			const promptInputs: string[] = [];
+			const { promise: promptDone, resolve: finishPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					finishPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [
+				{ role: "user", content: "hello", timestamp: 1 } as AgentMessage,
+				{ role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 } as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+			const reviewId = runtime.onTurnEnd(messages);
+			await promptDone;
+			expect(reviewId).toBeGreaterThan(0);
+			expect(promptInputs).toHaveLength(1);
+		});
+	});
 	describe("advisor default tools", () => {
 		it("defaults to read/grep/glob, a subset of the full grantable tool pool", () => {
 			expect([...ADVISOR_DEFAULT_TOOL_NAMES]).toEqual(["read", "grep", "glob"]);

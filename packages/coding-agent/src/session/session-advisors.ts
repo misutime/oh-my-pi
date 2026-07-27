@@ -302,6 +302,7 @@ export class SessionAdvisors {
 		this.#advisorPrimaryTurnsCompleted++;
 
 		const isTerminal = willContinue === false;
+		const triggerMode = String(this.#host.settings.get("advisor.trigger") ?? "always");
 
 		// Terminal turn: store reviewId on each advisor, return immediately.
 		// Advice arrives asynchronously via #routeAdvice which checks
@@ -310,7 +311,7 @@ export class SessionAdvisors {
 			for (const advisor of this.#advisors) {
 				if (advisor.runtime.disposed) continue;
 				try {
-					const reviewId = advisor.runtime.onTurnEnd(messages, { willContinue });
+					const reviewId = advisor.runtime.onTurnEnd(messages, { willContinue, triggerMode });
 					if (reviewId !== 0) {
 						advisor.pendingTerminalReviewIds.add(reviewId);
 						advisor.pendingTerminalReviewGeneration = this.#userPromptGeneration;
@@ -326,7 +327,7 @@ export class SessionAdvisors {
 		for (const advisor of this.#advisors) {
 			if (advisor.runtime.disposed) continue;
 			try {
-				advisor.runtime.onTurnEnd(messages, { willContinue });
+				advisor.runtime.onTurnEnd(messages, { willContinue, triggerMode });
 			} catch (error) {
 				logger.warn("advisor onTurnEnd threw; delta dropped", { advisor: advisor.name, err: String(error) });
 			}

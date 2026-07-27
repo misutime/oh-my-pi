@@ -504,6 +504,19 @@ export const SETTINGS_SCHEMA = {
 			condition: "advisorEnabled",
 		},
 	},
+"advisor.trigger": {
+	type: "enum",
+	values: ["always", "safe_tools"] as const,
+	default: "always",
+	ui: {
+		tab: "model",
+		group: "Advisor",
+		label: "Advisor Trigger",
+		description:
+			"When to trigger advisor review. 'always' reviews every turn. 'safe_tools' skips turns whose delta contains only read-only / bookkeeping tool calls (read, grep, glob, lsp, web_search, todo, hub, ask).",
+		condition: "advisorEnabled",
+	},
+},
 	shellPath: { type: "string", default: undefined },
 	"git.enabled": {
 		type: "boolean",
