@@ -2,9 +2,9 @@
  * /review command - Interactive code review launcher
  *
  * Provides a menu to select review mode:
- * 1. Review against a base branch (PR style)
- * 2. Review uncommitted changes
- * 3. Review a specific commit
+ * 1. Review uncommitted changes
+ * 2. Review a specific commit
+ * 3. Review against a base branch (PR style)
  * 4. Custom review instructions
  *
  * Runs VCS diffs upfront, parses results, filters noise, and provides
@@ -495,16 +495,16 @@ export class ReviewCommand implements CustomCommand {
 				value: { kind: "detected-pr" as const, ref },
 			})),
 			{
-				label: "1. Review against a base branch (PR Style)",
-				value: { kind: "base-branch" },
-			},
-			{
-				label: "2. Review uncommitted changes",
+				label: "1. Review uncommitted changes",
 				value: { kind: "uncommitted" },
 			},
 			{
-				label: "3. Review a specific commit",
+				label: "2. Review a specific commit",
 				value: { kind: "commit" },
+			},
+			{
+				label: "3. Review against a base branch (PR Style)",
+				value: { kind: "base-branch" },
 			},
 		];
 

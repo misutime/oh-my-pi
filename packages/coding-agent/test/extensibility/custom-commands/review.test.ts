@@ -198,7 +198,7 @@ describe("ReviewCommand", () => {
 		try {
 			const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 			const ctx = createContext({
-				selectedMode: "2. Review uncommitted changes",
+				selectedMode: "1. Review uncommitted changes",
 			});
 
 			const result = await command.execute([], ctx);
@@ -550,9 +550,9 @@ describe("ReviewCommand", () => {
 
 		expect(result).toBeDefined();
 		expect(reviewModeOptions).toEqual([
-			"1. Review against a base branch (PR Style)",
-			"2. Review uncommitted changes",
-			"3. Review a specific commit",
+			"1. Review uncommitted changes",
+			"2. Review a specific commit",
+			"3. Review against a base branch (PR Style)",
 			"4. Custom review instructions",
 		]);
 	});
@@ -564,7 +564,7 @@ describe("ReviewCommand", () => {
 		const diffSpy = spyOn(git, "diff").mockResolvedValue(SAMPLE_PR_DIFF);
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = createContext({
-			selectResults: ["1. Review against a base branch (PR Style)", "main"],
+			selectResults: ["3. Review against a base branch (PR Style)", "main"],
 		});
 
 		const result = await command.execute([], ctx);
@@ -581,7 +581,7 @@ describe("ReviewCommand", () => {
 		const showSpy = spyOn(git, "show").mockResolvedValue(SAMPLE_PR_DIFF);
 		const command = new ReviewCommand({ cwd: dir } as unknown as CustomCommandAPI);
 		const ctx = createContext({
-			selectResults: ["3. Review a specific commit", "abc1234 Fix review command"],
+			selectResults: ["2. Review a specific commit", "abc1234 Fix review command"],
 		});
 
 		const result = await command.execute([], ctx);
