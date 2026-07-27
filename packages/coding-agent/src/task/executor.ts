@@ -46,7 +46,7 @@ import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
-import { type ConfiguredThinkingLevel, prewalkWouldBeNoop, resolveTaskEffortLevel, type TaskEffort } from "../thinking";
+import { type ConfiguredThinkingLevel, prewalkWouldBeNoop, resolveEffortCeiling, resolveTaskEffortLevel, type TaskEffort } from "../thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../tools/hub";
@@ -2649,7 +2649,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Caller-requested coarse effort maps onto the resolved model's
 			// supported range; undefined (no effort, or no controllable effort
 			// surface) falls through to the normal selectors below.
-			const effortLevel = options.effort !== undefined ? resolveTaskEffortLevel(model, options.effort) : undefined;
+			// Ceiling: an explicit `:level` suffix or agent `thinking-level`
+			// caps the LLM-chosen effort — the LLM can only go *down* from the
+			// configured ceiling, never above it.
+			const ceiling = resolveEffortCeiling(explicitThinkingLevel, resolvedThinkingLevel, thinkingLevel);
+			const effortLevel =
+				options.effort !== undefined ? resolveTaskEffortLevel(model, options.effort, ceiling) : undefined;
 			if (model) {
 				const displayLevel = effortLevel ?? (explicitThinkingLevel ? resolvedThinkingLevel : undefined);
 				progress.resolvedModel =
@@ -2657,9 +2662,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						? formatModelSelectorValue(formatModelStringWithRouting(model), displayLevel)
 						: formatModelStringWithRouting(model);
 			}
-			// Precedence: caller `effort` > explicit `:level` suffix on the resolved
-			// model pattern > agent-definition default (e.g. task's `auto`) >
-			// pattern-derived level.
+			// Precedence: caller `effort` (clamped to ceiling) > explicit
+			// `:level` suffix on the resolved model pattern > agent-definition
+			// default (e.g. task's `auto`) > pattern-derived level.
 			const effectiveThinkingLevel =
 				effortLevel ?? (explicitThinkingLevel ? resolvedThinkingLevel : (thinkingLevel ?? resolvedThinkingLevel));
 			resolvedAt = performance.now();

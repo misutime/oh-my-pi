@@ -264,7 +264,6 @@ export const TASK_EFFORTS = ["lo", "med", "hi"] as const;
 
 /** Coarse task-spawn effort: the lowest, middle, or highest thinking level the target model supports. */
 export type TaskEffort = (typeof TASK_EFFORTS)[number];
-
 /**
  * Maps a coarse task effort onto the model's supported thinking range:
  * `lo` = lowest supported level, `hi` = highest (whatever the model tops out
@@ -272,18 +271,95 @@ export type TaskEffort = (typeof TASK_EFFORTS)[number];
  * an even-sized range). Without a model, maps over the full canonical range.
  * Returns `undefined` when the model has no controllable effort surface, so
  * callers fall back to their default selector (e.g. `auto`).
+ *
+ * When `ceiling` is set, the result is clamped to not exceed it — an agent
+ * definition `thinking-level` or model-role `:level` suffix can cap the
+ * LLM-chosen `effort` at the configured ceiling while still allowing downward
+ * adjustment for simpler tasks.
  */
-export function resolveTaskEffortLevel(model: Model | undefined, effort: TaskEffort): Effort | undefined {
+export function resolveTaskEffortLevel(
+	model: Model | undefined,
+	effort: TaskEffort,
+	ceiling?: Effort,
+): Effort | undefined {
 	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
 	if (supported.length === 0) return undefined;
+	let result: Effort;
 	switch (effort) {
 		case "lo":
-			return supported[0];
+			result = supported[0];
+			break;
 		case "med":
-			return supported[(supported.length - 1) >> 1];
+			result = supported[(supported.length - 1) >> 1];
+			break;
 		case "hi":
-			return supported[supported.length - 1];
+			result = supported[supported.length - 1];
+			break;
+		default:
+			return undefined;
 	}
+	if (ceiling !== undefined) {
+		// Clamp the ceiling into the model's supported range — an agent's
+		// `thinking-level` may reference an effort the resolved model doesn't
+		// actually support (e.g. `high` on a model with only `[minimal, low, medium]`).
+		// Walk down the canonical effort ladder to the nearest supported level.
+		let effectiveCeiling: Effort | undefined;
+		for (let i = THINKING_EFFORTS.indexOf(ceiling); i >= 0; i--) {
+			if (supported.includes(THINKING_EFFORTS[i])) {
+				effectiveCeiling = THINKING_EFFORTS[i];
+				break;
+			}
+		}
+		if (
+			effectiveCeiling !== undefined &&
+			THINKING_EFFORTS.indexOf(result) > THINKING_EFFORTS.indexOf(effectiveCeiling)
+		) {
+			return effectiveCeiling;
+		}
+	}
+	return result;
+}
+
+/**
+ * Extract the thinking effort ceiling from the subagent's resolved model
+ * pattern and definition. The ceiling is the most restrictive (lowest-index)
+ * concrete {@link Effort} among:
+ * 1. An explicit `:level` suffix on the model-role pattern (user/agent config)
+ * 2. The agent definition's `thinking-level` frontmatter
+ *
+ * Non-concrete selectors (`auto`, `inherit`, `off`) are skipped — only
+ * explicit effort levels act as ceilings. Returns `undefined` when no
+ * ceiling is configured, leaving `effort` unrestricted.
+ */
+export function resolveEffortCeiling(
+	explicitThinkingLevel: boolean,
+	resolvedThinkingLevel: ConfiguredThinkingLevel | undefined,
+	thinkingLevel: ConfiguredThinkingLevel | undefined,
+): Effort | undefined {
+	let ceiling: Effort | undefined;
+	// Explicit :level suffix on the resolved model pattern (e.g. @slow → …:high)
+	if (
+		explicitThinkingLevel &&
+		resolvedThinkingLevel !== undefined &&
+		resolvedThinkingLevel !== AUTO_THINKING &&
+		resolvedThinkingLevel !== ThinkingLevel.Inherit &&
+		resolvedThinkingLevel !== ThinkingLevel.Off
+	) {
+		ceiling = resolvedThinkingLevel as Effort;
+	}
+	// Agent-definition thinking-level frontmatter
+	if (
+		thinkingLevel !== undefined &&
+		thinkingLevel !== AUTO_THINKING &&
+		thinkingLevel !== ThinkingLevel.Inherit &&
+		thinkingLevel !== ThinkingLevel.Off
+	) {
+		const agent = thinkingLevel as Effort;
+		if (ceiling === undefined || THINKING_EFFORTS.indexOf(agent) < THINKING_EFFORTS.indexOf(ceiling)) {
+			ceiling = agent;
+		}
+	}
+	return ceiling;
 }
 
 /**
