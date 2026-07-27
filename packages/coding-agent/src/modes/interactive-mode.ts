@@ -4318,6 +4318,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (clearStatusContainer) {
 			this.statusContainer.disposeChildren();
 		}
+		this.ui.requestRender();
 	}
 
 	setWorkingMessage(message?: string): void {
