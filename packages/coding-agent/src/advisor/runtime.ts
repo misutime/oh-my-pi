@@ -962,7 +962,7 @@ export class AdvisorRuntime {
 							this.#notifyFailureOnce(err);
 							this.#consecutiveQuarantines = 0;
 							this.#resetAdvisorContext(true, true);
-							batchCompleted = true;
+							this.host.onBatchComplete?.(reviewIds);
 							continue;
 						}
 						const rePrime = this.#pending.length > 0 ? this.#latestMessages : undefined;
