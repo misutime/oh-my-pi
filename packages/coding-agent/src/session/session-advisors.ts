@@ -958,6 +958,7 @@ export class SessionAdvisors {
 			const interrupting = isInterruptingSeverity(severity);
 
 			if (!interrupting) {
+				logger.debug("advisor delivery: terminal nit → card", { severity, advisor: advisor.name });
 				// Nit/undefined: preserve as visible card, no turn trigger.
 				this.#host.preserveAdvisorCard({
 					role: "custom",
@@ -972,6 +973,7 @@ export class SessionAdvisors {
 				return;
 			}
 			if (this.#terminalInterventionConsumed) {
+				logger.debug("advisor delivery: terminal intervention consumed → card", { severity, advisor: advisor.name });
 				// Intervention already consumed this user-run — preserve as card.
 				this.#host.preserveAdvisorCard({
 					role: "custom",
@@ -992,6 +994,7 @@ export class SessionAdvisors {
 				this.#host.clientBridge()?.deferAgentInitiatedTurns === true &&
 				!this.#host.allowAgentInitiatedTurns();
 			if (this.#preserveAdvisorAdvice || this.#host.planModeState()?.enabled || cannotAutoTrigger) {
+				logger.debug("advisor delivery: terminal blocked → card", { severity, preserve: this.#preserveAdvisorAdvice, planMode: !!this.#host.planModeState()?.enabled, cannotAutoTrigger, advisor: advisor.name });
 				this.#host.preserveAdvisorCard({
 					role: "custom",
 					customType: "advisor",
@@ -1004,6 +1007,7 @@ export class SessionAdvisors {
 				advisor.pendingTerminalReviewIds.clear();
 				return;
 			}
+			logger.debug("advisor delivery: terminal steer → triggerTurn", { severity, advisor: advisor.name });
 
 			this.#recordAdvisorInterruptDelivered();
 			this.#terminalInterventionConsumed = true;
@@ -1042,12 +1046,13 @@ export class SessionAdvisors {
 			terminalAnswerNoQueuedWork: this.#hasTerminalTextAnswerWithoutQueuedWork(),
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
+		logger.debug("advisor delivery: normal path channel", { severity, channel, streaming: this.#host.agent.state.isStreaming, advisor: advisor.name });
 		if (channel === "aside") {
 			if (this.#host.agent.state.isStreaming) {
+				logger.debug("advisor delivery: normal aside → enqueue", { severity, advisor: advisor.name });
 				this.#host.yieldQueue.enqueue("advisor", { note: deliveredNote, severity, advisor: source });
 			} else {
-				// No live loop can consume aside entries (YieldQueue uses skipIdleFlush).
-				// Preserve as a visible card so the note is not stranded.
+				logger.debug("advisor delivery: normal aside → idle card", { severity, advisor: advisor.name });
 				const notes: AdvisorNote[] = [{ note: deliveredNote, severity, advisor: source }];
 				this.#host.preserveAdvisorCard({
 					role: "custom",
@@ -1065,6 +1070,7 @@ export class SessionAdvisors {
 		const content = formatAdvisorBatchContent(notes);
 		const details = { notes } satisfies AdvisorMessageDetails;
 		if (channel === "preserve") {
+			logger.debug("advisor delivery: normal preserve → card", { severity, advisor: advisor.name });
 			this.#host.preserveAdvisorCard({
 				role: "custom",
 				customType: "advisor",
@@ -1089,6 +1095,7 @@ export class SessionAdvisors {
 			this.#host.clientBridge()?.deferAgentInitiatedTurns === true &&
 			!this.#host.allowAgentInitiatedTurns();
 		if (this.#host.planModeState()?.enabled || cannotAutoTrigger) {
+			logger.debug("advisor delivery: normal steer blocked → card", { severity, planMode: !!this.#host.planModeState()?.enabled, cannotAutoTrigger, advisor: advisor.name });
 			this.#host.preserveAdvisorCard({
 				role: "custom",
 				customType: "advisor",
@@ -1103,6 +1110,7 @@ export class SessionAdvisors {
 		// Arm the post-interrupt immune window before the fire-and-forget send.
 		// (When idle, triggerTurn starts a full run; arming before avoids arming
 		// after the run completes, which would be too late.)
+		logger.debug("advisor delivery: normal steer → triggerTurn", { severity, advisor: advisor.name });
 		this.#recordAdvisorInterruptDelivered();
 		void this.#host
 			.sendCustomMessage(
