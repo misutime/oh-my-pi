@@ -902,7 +902,7 @@ export class AdvisorRuntime {
 					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
 					if (turnError) throw turnError;
 					success = true;
-					batchCompleted = true;
+							batchCompleted = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
 					this.#droppedBacklogs = 0;
@@ -959,6 +959,7 @@ export class AdvisorRuntime {
 							this.#notifyFailureOnce(err);
 							this.#consecutiveQuarantines = 0;
 							this.#resetAdvisorContext(true, true);
+							batchCompleted = true;
 							continue;
 						}
 						const rePrime = this.#pending.length > 0 ? this.#latestMessages : undefined;
@@ -982,6 +983,7 @@ export class AdvisorRuntime {
 							overflowRecovery: recoveringOverflow || undefined,
 							reviewIds,
 						});
+							batchCompleted = true;
 						continue;
 					}
 					if (AIError.isUsageLimit(err)) {
@@ -1020,7 +1022,7 @@ export class AdvisorRuntime {
 						this.#clearSeenContext();
 						this.#noteDroppedBacklog(err);
 						success = true;
-						batchCompleted = true;
+							batchCompleted = true;
 					} else if (contextOverflow) {
 						this.#clearAdvisorContextAtCurrentCursor();
 						if (contextWasFresh) {
