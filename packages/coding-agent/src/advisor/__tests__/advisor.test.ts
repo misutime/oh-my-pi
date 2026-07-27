@@ -4364,6 +4364,54 @@ describe("advisor", () => {
 			expect(runtime.backlog).toBe(0);
 			expect(quotaNotified).toBe(0);
 		});
+
+		it("calls onBatchComplete when MAX_QUARANTINE_RETRIES drops the batch", async () => {
+			// Two sequential onTurnEnd calls, each producing a quarantined prompt.
+			// After MAX_QUARANTINE_RETRIES (2) consecutive quarantines the batch is
+			// dropped and onBatchComplete must fire.
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					throw new AdvisorOutputQuarantinedError("quarantined");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			let batchCompletedCalls = 0;
+			let completedReviewIds: Set<number> | undefined;
+			let notifyFailureCalls = 0;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onTurnError: async () => undefined,
+				onBatchComplete: reviewIds => {
+					batchCompletedCalls++;
+					completedReviewIds = new Set(reviewIds);
+				},
+				notifyFailure: () => {
+					notifyFailureCalls++;
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			// First turn: quarantine #1, exhausts pending and exits drain.
+			const msg: AgentMessage = { role: "user", content: "one", timestamp: 1 } as AgentMessage;
+			runtime.onTurnEnd([msg]);
+			await settleUntil(() => runtime.backlog === 0, 1000);
+
+			// Second turn: quarantine #2 → MAX_QUARANTINE_RETRIES reached → onBatchComplete fires.
+			runtime.onTurnEnd([{ role: "user", content: "two", timestamp: 2 } as AgentMessage]);
+			await settleUntil(() => batchCompletedCalls > 0, 1000);
+
+			expect(promptInputs).toHaveLength(2);
+			expect(batchCompletedCalls).toBe(1);
+			expect(completedReviewIds).toBeDefined();
+			expect(completedReviewIds!.size).toBeGreaterThan(0);
+			expect(notifyFailureCalls).toBe(1);
+			expect(runtime.backlog).toBe(0);
+		});
 		it("uses generic failure path when switched retry hits a non-quota error", async () => {
 			const promptInputs: string[] = [];
 			let callCount = 0;
