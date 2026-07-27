@@ -4713,7 +4713,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "17.1.4"
+version = "17.1.5"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -4782,7 +4782,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "17.1.4"
+version = "17.1.5"
 dependencies = [
  "async-trait",
  "libc",
@@ -4794,7 +4794,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "17.1.4"
+version = "17.1.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4857,7 +4857,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "17.1.4"
+version = "17.1.5"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -4944,7 +4944,7 @@ dependencies = [
 
 [[package]]
 name = "pi-walker"
-version = "17.1.4"
+version = "17.1.5"
 dependencies = [
  "dashmap",
  "globset",
@@ -7773,6 +7773,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "uucore 0.8.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
