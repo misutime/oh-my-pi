@@ -185,6 +185,12 @@ export class InputController {
  *  guards against stale cache across session switches within the same
  *  InteractiveMode — a change clears the tracker so the next Tab starts fresh. */
 #preTabToggleModel: { model: Model; sessionId: string } | null = null;
+/** Snapshot of the advisor setting before entering the advisor model tab,
+ *  consumed on exit to restore the prior enabled/disabled state. Captured
+ *  via `isAdvisorEnabled()` (not `isAdvisorActive()`) so we restore
+ *  correctly even when no live runtime has been built yet. `null` means
+ *  no toggle is in flight. */
+#toggleAdvisorWasEnabled: boolean | null = null;
 	#leftTapCount = 0;
 	// Sequential index for `local://paste-N.md` references created by the large-paste
 	// flow. Seeded from 0 and bumped past existing paste files.
@@ -1920,6 +1926,12 @@ export class InputController {
 				const currentSessionId = this.ctx.sessionManager.getSessionId();
 				if (saved && saved.sessionId === currentSessionId) {
 					await this.ctx.session.setModelTemporary(saved.model, undefined, { ephemeral: true });
+					// Restore advisor runtime to the state before the toggle if it was
+					// captured (null = no toggle in flight, don't touch advisor state).
+					if (this.#toggleAdvisorWasEnabled === true) {
+						this.ctx.session.setAdvisorEnabled(true);
+					}
+					this.#toggleAdvisorWasEnabled = null;
 					this.ctx.showStatus("Switched back to previous model");
 				} else {
 					this.ctx.showStatus("No previous model to toggle back to");
@@ -1928,7 +1940,8 @@ export class InputController {
 				// Not on advisor — switch to advisor.
 				// Resolve the default-model side once and freeze it, so the toggle is
 				// always between the same two models.
-				if (!this.#preTabToggleModel || this.#preTabToggleModel.sessionId !== this.ctx.sessionManager.getSessionId()) {
+				const currentSessionId = this.ctx.sessionManager.getSessionId();
+				if (!this.#preTabToggleModel || this.#preTabToggleModel.sessionId !== currentSessionId) {
 					const defaultModelStr = this.ctx.settings.getModelRole("default");
 					const otherModel = defaultModelStr
 						? resolveModelRoleValue(defaultModelStr, this.ctx.session.modelRegistry.getAvailable(), {
@@ -1937,14 +1950,29 @@ export class InputController {
 						: currentModel;
 					this.#preTabToggleModel = {
 						model: otherModel,
-						sessionId: this.ctx.sessionManager.getSessionId(),
+						sessionId: currentSessionId,
 					};
+					// Session changed: stale advisor snapshot from old session
+					// must not leak into the new one.
+					this.#toggleAdvisorWasEnabled = null;
 				}
+				// Capture the advisor setting state on entry (outside the freeze
+				// block so re-entry in the same session is tracked). The snapshot is
+				// consumed and cleared on exit; the next entry captures the live
+				// setting again. Using isAdvisorEnabled() (not isAdvisorActive())
+				// ensures we restore correctly even when no live runtime is built yet.
+				const advisorSnapshot =
+					this.#toggleAdvisorWasEnabled === null
+						? this.ctx.session.isAdvisorEnabled()
+						: this.#toggleAdvisorWasEnabled;
+				// Switch model first so a failure leaves advisor state untouched.
 				await this.ctx.session.setModelTemporary(
 					advisorSelection.model,
 					advisorSelection.thinkingLevel,
 					{ ephemeral: true },
 				);
+				this.#toggleAdvisorWasEnabled = advisorSnapshot;
+				this.ctx.session.setAdvisorEnabled(false);
 				this.ctx.showStatus("Switched to advisor model");
 			}
 
