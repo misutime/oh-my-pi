@@ -775,3 +775,337 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(mock.calls.length).toBe(1);
 	});
 });
+
+describe("AgentSession advisor terminal turn feedback characterization", () => {
+	let tempDir: TempDir;
+	let session: AgentSession;
+	const authStorages: AuthStorage[] = [];
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@pi-advisor-term-");
+	});
+
+	afterEach(async () => {
+		try {
+			await session?.dispose();
+		} finally {
+			for (const authStorage of authStorages.splice(0)) authStorage.close();
+			await Bun.sleep(0);
+			await tempDir?.remove();
+		}
+	});
+
+	/**
+	 * Create a session whose advisor produces a nit (or no severity, which defaults
+	 * to nit). The primary mock has two responses to handle a potential re-evaluation
+	 * turn triggered by the nit being picked up in the outer yield poll.
+	 */
+	async function createNitAdvisorSession(
+		note: string,
+		severity?: "nit",
+	): Promise<CompletedAdvisorHarness> {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["TASK COMPLETE"], stopReason: "stop" },
+				{ content: ["ACKNOWLEDGED"], stopReason: "stop" },
+			],
+		});
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+						arguments: severity !== undefined ? { note, severity } : { note },
+						},
+					],
+				},
+				{ content: ["no further advice"], stopReason: "stop" },
+				{ content: ["advisor review complete"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"advisor.syncBacklog": "1",
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorTools: [],
+			advisorStreamFn: advisorMock.stream,
+		});
+		return { session, sessionManager, mock, advisorMock };
+	}
+
+	/**
+	 * Create a session whose advisor produces only text (no advise tool calls).
+	 * Used to characterize silent-advisor behavior.
+	 */
+	async function createSilentAdvisorSession(): Promise<CompletedAdvisorHarness> {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["TASK COMPLETE"], stopReason: "stop" },
+			],
+		});
+		const advisorMock = createMockModel({
+			responses: [
+				{ content: ["review complete, no issues"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"advisor.syncBacklog": "1",
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorTools: [],
+			advisorStreamFn: advisorMock.stream,
+		});
+		return { session, sessionManager, mock, advisorMock };
+	}
+
+	/**
+	 * Create a session whose advisor produces an "all good" / "lgtm" note that the
+	 * emission guard should suppress as content-free filler.
+	 */
+	async function createSuppressedPhraseSession(phrase: string): Promise<CompletedAdvisorHarness> {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["TASK COMPLETE"], stopReason: "stop" },
+				{ content: ["ACKNOWLEDGED"], stopReason: "stop" },
+			],
+		});
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: phrase },
+						},
+					],
+				},
+				{ content: ["advisor review complete"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"advisor.syncBacklog": "1",
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			advisorTools: [],
+			advisorStreamFn: advisorMock.stream,
+		});
+		return { session, sessionManager, mock, advisorMock };
+	}
+
+	// ── Terminal nit visibility ──
+
+	it("injects an advisor nit into the transcript after a terminal turn", async () => {
+		const { session, mock } = await createNitAdvisorSession("Document looks correct.");
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		// The nit should appear as a preserved advisor card in the transcript.
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		expect(advisorCards.length).toBeGreaterThan(0);
+		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "");
+		expect(cardTexts.join(" ")).toContain("Document looks correct");
+	});
+
+	it("nit is preserved as visible card without triggering extra turns", async () => {
+		const { session, mock } = await createNitAdvisorSession("fine-tuning suggestion");
+
+		let agentStartCount = 0;
+		const unsub = session.agent.subscribe(event => {
+			if (event.type === "agent_start") agentStartCount++;
+		});
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		// Nit is preserved as visible card — no primary re-evaluation and still
+		// only one agent_start.
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		expect(advisorCards.length).toBeGreaterThan(0);
+		expect(agentStartCount).toBe(1);
+		unsub();
+	});
+
+	// ── Silent advisor (no advice) ──
+
+	it("silent advisor does not inject any advisor card", async () => {
+		const { session, mock } = await createSilentAdvisorSession();
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		expect(advisorCards).toHaveLength(0);
+		// Primary called exactly once — no re-evaluation turn.
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("silent advisor produces exactly one agent_start", async () => {
+		const { session } = await createSilentAdvisorSession();
+
+		let agentStartCount = 0;
+		const unsub = session.agent.subscribe(event => {
+			if (event.type === "agent_start") agentStartCount++;
+		});
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		expect(agentStartCount).toBe(1);
+		unsub();
+	});
+
+	// ── Suppressed content-free phrases ──
+
+	it("suppresses 'lgtm' advice as content-free filler", async () => {
+		const { session, mock } = await createSuppressedPhraseSession("lgtm");
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		expect(advisorCards).toHaveLength(0);
+		// No re-evaluation triggered by suppressed phrase.
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("suppresses 'all good' advice", async () => {
+		const { session, mock } = await createSuppressedPhraseSession("all good");
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		expect(advisorCards).toHaveLength(0);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	it("suppresses 'no issue; continue.' advice", async () => {
+		const { session, mock } = await createSuppressedPhraseSession("no issue; continue.");
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		expect(advisorCards).toHaveLength(0);
+		expect(mock.calls.length).toBe(1);
+	});
+
+	// ── Nit-only fence batch does not consume intervention quota ──
+
+	it("nit-only terminal review does not consume the intervention cap", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ content: ["FIRST ANSWER"], stopReason: "stop" }],
+		});
+		// Advisor produces a nit only; no re-evaluation → no second review.
+		const advisorMock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "minor formatting nit" } }] },
+				{ content: ["no further advice"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false, "retry.enabled": false, "advisor.syncBacklog": "1",
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, advisorTools: [], advisorStreamFn: advisorMock.stream });
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(
+			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
+		);
+		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
+		expect(cardTexts).toContain("minor formatting nit");
+		expect(mock.calls.length).toBe(1);
+	});
+});
