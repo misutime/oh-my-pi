@@ -892,7 +892,7 @@ export class AdvisorRuntime {
 					// Reset the host's per-update advisor state (one-advise-per-update
 					// gate) before each model cycle so the new batch starts fresh.
 					this.host.beginAdvisorUpdate?.();
-					this.#activeReviewIds = reviewIds;
+					this.#activeReviewIds = new Set(reviewIds);
 					logger.debug("advisor prompt start", { reviewIds: [...reviewIds], batchLen: batch.length });
 					await this.agent.prompt(batch);
 					logger.debug("advisor prompt done", { reviewIds: [...reviewIds] });

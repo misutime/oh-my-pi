@@ -4412,6 +4412,44 @@ describe("advisor", () => {
 			expect(notifyFailureCalls).toBe(1);
 			expect(runtime.backlog).toBe(0);
 		});
+
+		it("passes non-empty reviewIds to onBatchComplete on silent success", async () => {
+			// The most common path: advisor prompt succeeds with no advice
+			// (deliberate silence). onBatchComplete must receive the correct reviewIds,
+			// NOT an empty set (regression: #activeReviewIds shared reference with
+			// reviewIds was cleared by inner finally before the callback).
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					// Silent success — no advice produced, just a stop.
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [{ role: "assistant", content: "", stopReason: "stop", timestamp: 1 }] as AgentMessage[] },
+			};
+			let batchCompletedCalls = 0;
+			let completedReviewIds: Set<number> | undefined;
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => [],
+				enqueueAdvice: () => {},
+				onBatchComplete: reviewIds => {
+					batchCompletedCalls++;
+					completedReviewIds = new Set(reviewIds);
+				},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const msg: AgentMessage = { role: "user", content: "hello", timestamp: 1 } as AgentMessage;
+			runtime.onTurnEnd([msg]);
+			await settleUntil(() => runtime.backlog === 0, 1000);
+
+			expect(promptInputs).toHaveLength(1);
+			expect(batchCompletedCalls).toBe(1);
+			expect(completedReviewIds).toBeDefined();
+			expect(completedReviewIds!.size).toBe(1);
+			expect(runtime.backlog).toBe(0);
+		});
 		it("uses generic failure path when switched retry hits a non-quota error", async () => {
 			const promptInputs: string[] = [];
 			let callCount = 0;
