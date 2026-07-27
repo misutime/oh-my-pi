@@ -263,6 +263,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// Fence steered the concern during onPrimaryTurnEnd, primary ran again
 		expect(mock.calls.length).toBe(2);
@@ -285,6 +288,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// Fence steered the blocker during onPrimaryTurnEnd, primary ran again
 		expect(mock.calls.length).toBe(2);
@@ -301,6 +307,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		});
 		await session.prompt("answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// Fence steered the concern during onPrimaryTurnEnd; the pushed card and the
 		// steered batch both appear in the transcript.
@@ -324,13 +333,16 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			{ type: "fallback", from: { model: "first" }, to: { model: "second" } },
 		);
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// Fence steered the concern during onPrimaryTurnEnd, primary ran again
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
 		expect(mock.calls.length).toBe(2);
 	});
 
-	it("steers a late advisor concern into the terminal fence without an extra agent_start", async () => {
+	it("steers a terminal concern via async review, starting an intervention turn", async () => {
 		const { session, mock } = await createCompletedAdvisorSession();
 
 		let agentStartCount = 0;
@@ -341,13 +353,16 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// Fence collected the concern during onPrimaryTurnEnd, steered it into the
 		// agent loop, and the primary ran again within the same user-run (no extra
 		// agent_start event was emitted — same session continues).
 		expect(mock.calls.length).toBe(2);
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
-		expect(agentStartCount).toBe(1);
+		expect(agentStartCount).toBe(2);
 		unsub();
 
 });
@@ -631,6 +646,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(hookSession.setAdvisorEnabled(true)).toBe(true);
 		await hookSession.prompt("read five fixture files and answer with exactly one line");
 		await hookSession.waitForIdle();
+		await hookSession.waitForAdvisorCatchup(5000);
+		await hookSession.waitForIdle();
+		await hookSession.waitForAdvisorCatchup(5000);
 
 		// Fence steered the concern: extension hooks must fire for the
 		// steer-delivered advisor card (message_start/message_end for the
@@ -647,6 +665,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(pSession.setAdvisorEnabled(true)).toBe(true);
 		await pSession.prompt("read five fixture files and answer with exactly one line");
 		await pSession.waitForIdle();
+		await pSession.waitForAdvisorCatchup(5000);
+		await pSession.waitForIdle();
+		await pSession.waitForAdvisorCatchup(5000);
 
 		// The fence-steered advice must be persisted through the session
 		// manager before catchup reports completion.
@@ -698,6 +719,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// First terminal concern: steered into the agent loop (intervention consumed)
 		expect(mock.calls.length).toBe(2);
@@ -767,6 +791,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// In plan mode, the fence should NOT steer the concern — it must be
 		// preserved as a visible advisor card instead.
@@ -961,6 +988,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
 
 		// The nit should appear as a preserved advisor card in the transcript.
 		const advisorCards = session.agent.state.messages.filter(
@@ -982,6 +1011,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
 
 		// Nit is preserved as visible card — no primary re-evaluation and still
 		// only one agent_start.
@@ -1000,6 +1031,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 		await session.waitForIdle();
 
 		const advisorCards = session.agent.state.messages.filter(
@@ -1021,9 +1054,12 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
 
 		expect(agentStartCount).toBe(1);
 		unsub();
+
 	});
 
 	// ── Suppressed content-free phrases ──
@@ -1033,6 +1069,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 		await session.waitForIdle();
 
 		const advisorCards = session.agent.state.messages.filter(
@@ -1049,6 +1087,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
 
 		const advisorCards = session.agent.state.messages.filter(
 			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
@@ -1062,6 +1102,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 		await session.waitForIdle();
 
 		const advisorCards = session.agent.state.messages.filter(
@@ -1104,7 +1146,8 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("write a document and answer with exactly one line");
 		await session.waitForIdle();
-
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
 		const advisorCards = session.agent.state.messages.filter(
 			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
 		);
@@ -1147,6 +1190,7 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 
 		await session.prompt("write a document and answer with exactly one line");
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// Session is idle — primary ran exactly once.
 		expect(mock.calls.length).toBe(1);
@@ -1164,6 +1208,7 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 			{ deliverAs: "steer", triggerTurn: true },
 		);
 		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 
 		// triggerTurn returns true when it synchronously started a new turn.
 		expect(result).toBe(true);
@@ -1218,7 +1263,9 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
-
+		await session.waitForAdvisorCatchup(5000);
+		await session.waitForIdle();
+		await session.waitForAdvisorCatchup(5000);
 		// First concern triggered an intervention turn; second concern was capped.
 		// Total: original turn + exactly one intervention turn = 2.
 		expect(mock.calls.length).toBe(2);

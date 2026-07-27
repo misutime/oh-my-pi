@@ -243,6 +243,7 @@ interface PendingDelta {
 	/** Whether the primary was mid-turn (willContinue:true) when this delta was rendered. */
 	wip: boolean;
 	overflowRecovery?: boolean;
+	reviewIds?: Set<number>;
 }
 
 interface CatchupWaiter {
@@ -283,6 +284,8 @@ export class AdvisorRuntime {
 	#renderRevision = 0;
 	/** Regex secret values observed in primary deltas and retained until advisor context resets. */
 	#advisorRegexSecretValues = new Set<string>();
+	#nextReviewId = 0;
+	#activeReviewIds = new Set<number>();
 	#pending: PendingDelta[] = [];
 	#busy = false;
 	#backlog = 0;
@@ -362,12 +365,13 @@ export class AdvisorRuntime {
 	 *   advisor knows to withhold critique on partial work. The flag is carried on
 	 *   the delta and forwarded to the reprime path so it is never silently dropped.
 	 */
-	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean }): void {
-		if (this.disposed || this.#quotaExhausted || this.#halted) return;
+	onTurnEnd(messages?: AgentMessage[], opts?: { willContinue?: boolean }): number {
+		if (this.disposed || this.#quotaExhausted || this.#halted) return 0;
+		const reviewId = ++this.#nextReviewId;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
 		const wip = opts?.willContinue ?? false;
-		let rendered: Omit<PendingDelta, "turns" | "overflowRecovery"> | null = null;
+		let rendered: Omit<PendingDelta, "turns" | "overflowRecovery" | "reviewIds"> | null = null;
 		// #renderDelta advances the cursor/prefix/dedup state before formatting
 		// can throw; snapshot them so a formatter bug loses NOTHING — the next
 		// turn re-renders this delta (a prefix change mid-render self-heals via
@@ -390,11 +394,16 @@ export class AdvisorRuntime {
 			logger.warn("advisor delta render failed", { err: String(err) });
 		}
 		if (rendered) {
-			this.#pending.push({ ...rendered, turns: 1 });
+			this.#pending.push({ ...rendered, turns: 1, reviewIds: new Set([reviewId]) });
 			this.#backlog++;
 			this.#notifyWaiters();
 			void this.#drain();
 		}
+		return reviewId;
+	}
+
+	isReviewActive(reviewId: number): boolean {
+		return this.#activeReviewIds.has(reviewId);
 	}
 
 	/**
@@ -447,6 +456,7 @@ export class AdvisorRuntime {
 		this.#consecutiveFailures = 0;
 		this.#failureNotified = false;
 		this.#advisorRegexSecretValues.clear();
+		this.#activeReviewIds.clear();
 		this.#wakeAllWaiters();
 		try {
 			this.agent.abort("advisor disposed");
@@ -517,6 +527,7 @@ export class AdvisorRuntime {
 		this.#droppedBacklogs = 0;
 		this.#consecutiveQuarantines = 0;
 		this.#failureNotified = false;
+		this.#activeReviewIds.clear();
 		this.#resetAdvisorContext(true, true);
 	}
 
@@ -714,6 +725,7 @@ export class AdvisorRuntime {
 		finalTurns: number;
 		wip: boolean;
 		resetContext: boolean;
+		reviewIds: Set<number>;
 	} | null> {
 		let batchText = initial.map(b => b.text).join("\n\n");
 		let rawMessages = initial.flatMap(b => b.rawMessages);
@@ -722,6 +734,10 @@ export class AdvisorRuntime {
 		// so a willContinue:true turn keeps its [in progress] heading. Also
 		// returned to #drain so the retry-requeue path preserves it on failed turns.
 		let wip = initial.at(-1)?.wip ?? false;
+		const reviewIds = new Set<number>();
+		for (const delta of initial) {
+			if (delta.reviewIds) for (const id of delta.reviewIds) reviewIds.add(id);
+		}
 
 		for (let round = 0; round < MAX_COALESCE_ROUNDS; round++) {
 			if (this.host.maintainContext) {
@@ -750,6 +766,9 @@ export class AdvisorRuntime {
 							wip = lateItems.at(-1)!.wip;
 							rawMessages = rawMessages.concat(lateItems.flatMap(b => b.rawMessages));
 						}
+						for (const delta of lateItems) {
+							if (delta.reviewIds) for (const id of delta.reviewIds) reviewIds.add(id);
+						}
 					}
 					// Reset only the advisor Agent/log. The primary cursor, backlog,
 					// waiters, latest snapshot, and epoch stay untouched. Re-render only
@@ -763,6 +782,7 @@ export class AdvisorRuntime {
 						finalTurns: turns,
 						wip,
 						resetContext: true,
+						reviewIds,
 					};
 				}
 			}
@@ -784,6 +804,9 @@ export class AdvisorRuntime {
 			batchText = [batchText, ...late.map(b => b.text)].join("\n\n");
 			rawMessages = rawMessages.concat(late.flatMap(b => b.rawMessages));
 			turns += late.reduce((sum, b) => sum + b.turns, 0);
+			for (const delta of late) {
+				if (delta.reviewIds) for (const id of delta.reviewIds) reviewIds.add(id);
+			}
 			wip = late.at(-1)!.wip;
 		}
 
@@ -791,7 +814,7 @@ export class AdvisorRuntime {
 		if (batchObfuscator?.hasSecrets()) {
 			batchText = batchObfuscator.stripUnsafeFriendlyPlaceholderPrefixes(batchText, this.#advisorRegexSecretValues);
 		}
-		return { batch: batchText || null, rawMessages, finalTurns: turns, wip, resetContext: false };
+		return { batch: batchText || null, rawMessages, finalTurns: turns, wip, resetContext: false, reviewIds };
 	}
 
 	#terminalAssistantFailure(snapshot: number): AssistantMessage | undefined {
@@ -839,7 +862,7 @@ export class AdvisorRuntime {
 				// Epoch was invalidated during batch collection; restart the loop.
 				if (result === null) continue;
 
-				const { batch, rawMessages, finalTurns, wip, resetContext } = result;
+				const { batch, rawMessages, finalTurns, wip, resetContext, reviewIds } = result;
 
 				if (this.disposed || batch === null) {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
@@ -859,6 +882,7 @@ export class AdvisorRuntime {
 					// Reset the host's per-update advisor state (one-advise-per-update
 					// gate) before each model cycle so the new batch starts fresh.
 					this.host.beginAdvisorUpdate?.();
+					this.#activeReviewIds = reviewIds;
 					await this.agent.prompt(batch);
 					// Agent.#runLoop catches provider/stream failures internally and
 					// resolves prompt() cleanly with stopReason: "error". Treat that
@@ -951,6 +975,7 @@ export class AdvisorRuntime {
 							turns: finalTurns,
 							wip,
 							overflowRecovery: recoveringOverflow || undefined,
+							reviewIds,
 						});
 						continue;
 					}
@@ -971,6 +996,7 @@ export class AdvisorRuntime {
 							turns: finalTurns,
 							wip,
 							overflowRecovery: recoveringOverflow || undefined,
+							reviewIds,
 						});
 						this.#wakeAllWaiters();
 						try {
@@ -1009,6 +1035,7 @@ export class AdvisorRuntime {
 								turns: finalTurns,
 								wip,
 								overflowRecovery: true,
+								reviewIds,
 							});
 							logger.debug("advisor context overflow recovered at current primary cursor");
 						}
@@ -1031,10 +1058,13 @@ export class AdvisorRuntime {
 								turns: finalTurns,
 								wip,
 								overflowRecovery: recoveringOverflow || undefined,
+								reviewIds,
 							});
 							await Bun.sleep(this.retryDelayMs);
 						}
 					}
+				} finally {
+					this.#activeReviewIds.clear();
 				}
 
 				if (success && this.#epoch === epoch) {
@@ -1043,6 +1073,7 @@ export class AdvisorRuntime {
 				}
 			}
 		} finally {
+			this.#activeReviewIds.clear();
 			this.#busy = false;
 		}
 	}

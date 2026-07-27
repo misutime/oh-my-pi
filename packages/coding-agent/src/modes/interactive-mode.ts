@@ -1645,7 +1645,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			pendingSubmissionDispose?.();
 			this.#optimisticUserMessageComponents = [];
 			this.#pendingWorkingMessage = undefined;
-			if (this.loadingAnimation) {
+			if (this.session.hasActiveAdvisorReviews?.()) {
+				this.loadingAnimation?.setMessage("Advisor 审查中…" + interruptHint());
+			} else if (this.loadingAnimation) {
 				this.#stopLoadingAnimation(true);
 			}
 		}

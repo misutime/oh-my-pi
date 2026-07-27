@@ -157,6 +157,8 @@ interface ActiveAdvisor {
 	providerSessionId: string | undefined;
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
+	pendingTerminalReviewIds: Set<number>;
+	pendingTerminalReviewGeneration?: number;
 	signature: string;
 }
 
@@ -261,13 +263,10 @@ export class SessionAdvisors {
 	#preserveAdvisorAdvice = false;
 	#advisorPrimaryTurnsCompleted = 0;
 	#advisorInterruptImmuneTurnStart: number | undefined;
-	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#advisorYieldQueueUnsubscribe: (() => void) | undefined;
-	#terminalFenceActive = false;
-	#fenceBatch: { note: string; severity: AdvisorSeverity | undefined; advisor: string | undefined }[] = [];
+	#pendingAdvisorCardEvents = new Set<Promise<void>>();
 	#terminalInterventionConsumed = false;
 	#userPromptGeneration = 0;
-	#fenceGeneration = 0;
 
 	constructor(host: SessionAdvisorsHost, options: SessionAdvisorsOptions) {
 		this.#host = host;
@@ -287,6 +286,10 @@ export class SessionAdvisors {
 	onUserPrompt(): void {
 		this.#userPromptGeneration++;
 		this.#terminalInterventionConsumed = false;
+		for (const advisor of this.#advisors) {
+			advisor.pendingTerminalReviewIds.clear();
+			advisor.pendingTerminalReviewGeneration = undefined;
+		}
 	}
 
 
@@ -298,15 +301,26 @@ export class SessionAdvisors {
 	): Promise<void> {
 		this.#advisorPrimaryTurnsCompleted++;
 
-		// Terminal turn: activate fence to collect interrupting notes
-		// instead of steering/preserving them immediately.
 		const isTerminal = willContinue === false;
+
+		// Terminal turn: store reviewId on each advisor, return immediately.
+		// Advice arrives asynchronously via #routeAdvice which checks
+		// pendingTerminalReviewId + isReviewActive for per-note delivery.
 		if (isTerminal) {
-			this.#terminalFenceActive = true;
-			this.#fenceBatch = [];
-			this.#fenceGeneration = this.#userPromptGeneration;
+			for (const advisor of this.#advisors) {
+				if (advisor.runtime.disposed) continue;
+				try {
+					const reviewId = advisor.runtime.onTurnEnd(messages, { willContinue });
+					advisor.pendingTerminalReviewIds.add(reviewId);
+					advisor.pendingTerminalReviewGeneration = this.#userPromptGeneration;
+				} catch (error) {
+					logger.warn("advisor onTurnEnd threw; delta dropped", { advisor: advisor.name, err: String(error) });
+				}
+			}
+			return;
 		}
 
+		// Non-terminal: deliver delta and wait for catch-up as before.
 		for (const advisor of this.#advisors) {
 			if (advisor.runtime.disposed) continue;
 			try {
@@ -316,112 +330,9 @@ export class SessionAdvisors {
 			}
 		}
 		const syncBacklog = this.#host.settings.get("advisor.syncBacklog");
-		if (this.#advisors.length > 0) {
-			if (isTerminal) {
-				await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(30_000, 1, signal)));
-			} else if (syncBacklog !== "off") {
-				const threshold = Number.parseInt(syncBacklog, 10);
-				await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(30_000, threshold, signal)));
-			}
-		}
-
-		// Terminal turn: process collected fence batch
-		if (isTerminal) {
-			this.#terminalFenceActive = false;
-			if (this.#fenceBatch.length > 0 && this.#userPromptGeneration === this.#fenceGeneration) {
-				// Partition: nit-only notes are informational and should NOT consume
-				// the per-user-run intervention quota or trigger a primary turn.
-				const hasInterrupting = this.#fenceBatch.some(e => isInterruptingSeverity(e.severity));
-				const notes: AdvisorNote[] = this.#fenceBatch.map(entry => ({
-					note: entry.note,
-					severity: entry.severity,
-					advisor: entry.advisor,
-				}));
-				const content = formatAdvisorBatchContent(notes);
-				const details = { notes } satisfies AdvisorMessageDetails;
-
-				if (!hasInterrupting) {
-					// Nit-only: preserve as visible card, no turn trigger.
-					this.#host.preserveAdvisorCard({
-						role: "custom",
-						customType: "advisor",
-						content,
-						display: true,
-						attribution: "agent",
-						details,
-						timestamp: Date.now(),
-					});
-				} else if (this.#terminalInterventionConsumed) {
-					// Intervention already consumed this user-run — preserve as card.
-					this.#host.preserveAdvisorCard({
-						role: "custom",
-						customType: "advisor",
-						content,
-						display: true,
-						attribution: "agent",
-						details,
-						timestamp: Date.now(),
-					});
-				} else {
-					// Mixed (contains concern/blocker): may steer if policy allows.
-					const cannotAutoTrigger =
-						!this.#host.agent.state.isStreaming &&
-						this.#host.clientBridge()?.deferAgentInitiatedTurns === true &&
-						!this.#host.allowAgentInitiatedTurns();
-					if (this.#host.planModeState()?.enabled || cannotAutoTrigger) {
-						this.#host.preserveAdvisorCard({
-							role: "custom",
-							customType: "advisor",
-							content,
-							display: true,
-							attribution: "agent",
-							details,
-							timestamp: Date.now(),
-						});
-					} else {
-						// Mark intervention consumed and arm the immune window BEFORE
-						// the triggered turn so that re-entrant terminal-fence processing
-						// (the intervention turn's own onPrimaryTurnEnd) sees the cap and
-						// downgrades further concern/blocker to preserve.
-						try {
-							this.#recordAdvisorInterruptDelivered();
-							this.#terminalInterventionConsumed = true;
-							await this.#host.sendCustomMessage(
-								{ customType: "advisor", content, display: true, attribution: "agent", details },
-								{ deliverAs: "steer", triggerTurn: true },
-							);
-						} catch (err) {
-							logger.warn("advisor fence delivery threw, preserving notes", { err: String(err) });
-							this.#host.preserveAdvisorCard({
-								role: "custom",
-								customType: "advisor",
-								content,
-								display: true,
-								attribution: "agent",
-								details,
-								timestamp: Date.now(),
-							});
-						}
-					}
-				}
-			} else if (this.#fenceBatch.length > 0) {
-				// Generation changed — preserve as visible card for cross-run safety.
-				const notes: AdvisorNote[] = this.#fenceBatch.map(entry => ({
-					note: entry.note,
-					severity: entry.severity,
-					advisor: entry.advisor,
-				}));
-				this.#host.preserveAdvisorCard({
-					role: "custom",
-					customType: "advisor",
-					content: formatAdvisorBatchContent(notes),
-					display: true,
-					attribution: "agent",
-					details: { notes } satisfies AdvisorMessageDetails,
-					timestamp: Date.now(),
-				});
-			}
-			this.#fenceBatch = [];
+		if (this.#advisors.length > 0 && syncBacklog !== "off") {
+			const threshold = Number.parseInt(syncBacklog, 10);
+			await Promise.all(this.#advisors.map(advisor => advisor.runtime.waitForCatchup(30_000, threshold, signal)));
 		}
 	}
 
@@ -953,6 +864,7 @@ export class SessionAdvisors {
 				thinkingLevel: advisorThinkingLevel,
 				providerSessionId: advisorProviderSessionId,
 				retryFallbackPendingSuccess: false,
+				pendingTerminalReviewIds: new Set<number>(),
 				signature,
 			};
 			this.#refreshAdvisorProviderIdentity(advisorRef);
@@ -1013,22 +925,95 @@ export class SessionAdvisors {
 			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
 			return;
 		}
-		// Fence active during terminal turn: collect ALL notes into the batch
-		// instead of routing them through the delivery channel. Nits are collected
-		// alongside concern/blocker; the batch is partitioned at fence close.
-		if (this.#terminalFenceActive) {
-			const deliveredNote = annotateForStaleness(note, advisor.runtime.hasFreshBacklog);
-			const source = advisor.slug ? advisor.name : undefined;
-			this.#fenceBatch.push({ note: deliveredNote, severity, advisor: source });
+
+		// Staleness annotation: caveat for new primary turns that arrived while the advisor was busy.
+		const deliveredNote = annotateForStaleness(note, advisor.runtime.hasFreshBacklog);
+		const source = advisor.slug ? advisor.name : undefined;
+
+		// Terminal review delivery: per-note delivery as each arrives from the advisor.
+		// Checks generation match so a new user prompt routes normally instead.
+		if (
+			advisor.pendingTerminalReviewIds.size > 0 &&
+			[...advisor.pendingTerminalReviewIds].some(id => advisor.runtime.isReviewActive(id)) &&
+			this.#userPromptGeneration === advisor.pendingTerminalReviewGeneration
+		) {
+			const notes: AdvisorNote[] = [{ note: deliveredNote, severity, advisor: source }];
+			const content = formatAdvisorBatchContent(notes);
+			const details = { notes } satisfies AdvisorMessageDetails;
+			const interrupting = isInterruptingSeverity(severity);
+
+			if (!interrupting) {
+				// Nit/undefined: preserve as visible card, no turn trigger.
+				this.#host.preserveAdvisorCard({
+					role: "custom",
+					customType: "advisor",
+					content,
+					display: true,
+					attribution: "agent",
+					details,
+					timestamp: Date.now(),
+				});
+				advisor.pendingTerminalReviewIds.clear();
+				return;
+			}
+			if (this.#terminalInterventionConsumed) {
+				// Intervention already consumed this user-run — preserve as card.
+				this.#host.preserveAdvisorCard({
+					role: "custom",
+					customType: "advisor",
+					content,
+					display: true,
+					attribution: "agent",
+					details,
+					timestamp: Date.now(),
+				});
+				advisor.pendingTerminalReviewIds.clear();
+				return;
+			}
+
+			// Concern/blocker with intervention quota still available.
+			const cannotAutoTrigger =
+				!this.#host.agent.state.isStreaming &&
+				this.#host.clientBridge()?.deferAgentInitiatedTurns === true &&
+				!this.#host.allowAgentInitiatedTurns();
+			if (this.#preserveAdvisorAdvice || this.#host.planModeState()?.enabled || cannotAutoTrigger) {
+				this.#host.preserveAdvisorCard({
+					role: "custom",
+					customType: "advisor",
+					content,
+					display: true,
+					attribution: "agent",
+					details,
+					timestamp: Date.now(),
+				});
+				advisor.pendingTerminalReviewIds.clear();
+				return;
+			}
+
+			this.#recordAdvisorInterruptDelivered();
+			this.#terminalInterventionConsumed = true;
+			void this.#host
+				.sendCustomMessage(
+					{ customType: "advisor", content, display: true, attribution: "agent", details },
+					{ deliverAs: "steer", triggerTurn: true },
+				)
+				.catch(err => {
+					logger.warn("advisor terminal review delivery threw, preserving note", { err: String(err) });
+					this.#host.preserveAdvisorCard({
+						role: "custom",
+						customType: "advisor",
+						content,
+						display: true,
+						attribution: "agent",
+						details,
+						timestamp: Date.now(),
+					});
+				});
+			advisor.pendingTerminalReviewIds.clear();
 			return;
 		}
-		// When newer primary turns already arrived while the advisor model was
-		// processing this batch, the advice was generated without seeing them.
-		// Append a lightweight staleness caveat so the primary can weigh recency.
-		const deliveredNote = annotateForStaleness(note, advisor.runtime.hasFreshBacklog);
-		// The implicit single ("default") advisor stamps no source name, so its
-		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
-		const source = advisor.slug ? advisor.name : undefined;
+
+		// Normal routing (non-terminal review path) — unchanged.
 		const interrupting = isInterruptingSeverity(severity);
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
@@ -1627,6 +1612,14 @@ export class SessionAdvisors {
 	 */
 	isAdvisorActive(): boolean {
 		return this.#advisors.length > 0;
+	}
+
+	/**
+	 * Whether any advisor has an active terminal review awaiting delivery.
+	 * Used by the TUI to show a working indicator while advice streams in.
+	 */
+	hasActiveTerminalReviews(): boolean {
+		return this.#advisors.some(a => a.pendingTerminalReviewIds.size > 0);
 	}
 
 	/**

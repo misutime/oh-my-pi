@@ -8184,6 +8184,14 @@ export class AgentSession {
 	}
 
 	/**
+	 * Whether any advisor has an active terminal review awaiting delivery.
+	 * Used by the TUI to show a working indicator while advice streams in.
+	 */
+	hasActiveAdvisorReviews(): boolean {
+		return this.#advisors.hasActiveTerminalReviews();
+	}
+
+	/**
 	 * The names of the tools available to advisors this session (the pool a
 	 * `/advisor configure` editor lists). The advisor is a full agent, so this is the
 	 * full built tool set; a tool whose optional factory returns null (e.g. lsp with
