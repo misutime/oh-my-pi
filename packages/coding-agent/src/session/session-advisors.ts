@@ -379,16 +379,17 @@ export class SessionAdvisors {
 							timestamp: Date.now(),
 						});
 					} else {
-						// Await steer enqueue. sendCustomMessage returns false for
-						// successful steers during streaming — the boolean is not a
-						// delivery-success flag. Only exceptions indicate true failure.
+						// Mark intervention consumed and arm the immune window BEFORE
+						// the triggered turn so that re-entrant terminal-fence processing
+						// (the intervention turn's own onPrimaryTurnEnd) sees the cap and
+						// downgrades further concern/blocker to preserve.
 						try {
-							await this.#host.sendCustomMessage(
-								{ customType: "advisor", content, display: true, attribution: "agent", details },
-								{ deliverAs: "steer" },
-							);
 							this.#recordAdvisorInterruptDelivered();
 							this.#terminalInterventionConsumed = true;
+							await this.#host.sendCustomMessage(
+								{ customType: "advisor", content, display: true, attribution: "agent", details },
+								{ deliverAs: "steer", triggerTurn: true },
+							);
 						} catch (err) {
 							logger.warn("advisor fence delivery threw, preserving notes", { err: String(err) });
 							this.#host.preserveAdvisorCard({

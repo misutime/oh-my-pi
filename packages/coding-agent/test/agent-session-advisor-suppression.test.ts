@@ -795,6 +795,10 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		}
 	});
 
+		function isAdvisorCard(message: AgentMessage): boolean {
+			return message.role === "custom" && (message as { customType?: string }).customType === ADVISOR_TYPE;
+		}
+
 	/**
 	 * Create a session whose advisor produces a nit (or no severity, which defaults
 	 * to nit). The primary mock has two responses to handle a potential re-evaluation
@@ -1107,5 +1111,122 @@ describe("AgentSession advisor terminal turn feedback characterization", () => {
 		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
 		expect(cardTexts).toContain("minor formatting nit");
 		expect(mock.calls.length).toBe(1);
+	});
+
+	// ── Idle-path triggerTurn: fence relies on this when the primary loop has exited ──
+	// NOTE: This tests the host sendCustomMessage({triggerTurn:true}) mechanism that the
+	// fence fix depends on for async/idle delivery. It is NOT an end-to-end reproduction
+	// of the fence's async timing (mock runs synchronously inside #beginInFlight).
+
+	it("triggerTurn starts a new turn from idle (fence idle-path mechanism)", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["FIRST ANSWER"], stopReason: "stop" },
+				{ content: ["INTERVENTION RESPONSE"], stopReason: "stop" },
+			],
+		});
+		// No advisor — test only the host sendCustomMessage({triggerTurn:true}) mechanism.
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false, "retry.enabled": false,
+		});
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent, sessionManager, settings, modelRegistry,
+			advisorTools: [], advisorStreamFn: undefined,
+		});
+
+		await session.prompt("write a document and answer with exactly one line");
+		await session.waitForIdle();
+
+		// Session is idle — primary ran exactly once.
+		expect(mock.calls.length).toBe(1);
+
+		// Simulate what the terminal fence does when the agent loop has fully exited:
+		// deliverAs: "steer" + triggerTurn: true must start a new turn from idle.
+		const result = await session.sendCustomMessage(
+			{
+				customType: ADVISOR_TYPE,
+				content: "late blocker found after turn end",
+				display: true,
+				attribution: "agent",
+				details: { notes: [{ note: "late blocker found after turn end", severity: "blocker" }] },
+			},
+			{ deliverAs: "steer", triggerTurn: true },
+		);
+		await session.waitForIdle();
+
+		// triggerTurn returns true when it synchronously started a new turn.
+		expect(result).toBe(true);
+		// Primary ran again: original + intervention = 2.
+		expect(mock.calls.length).toBe(2);
+		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
+		expect(advisorCards.length).toBeGreaterThan(0);
+		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
+		expect(cardTexts).toContain("late blocker");
+	});
+
+	// ── Re-entrant cap: intervention turn's own terminal concern is preserved ──
+
+	it("caps intervention at one per user-run: second terminal concern preserved as card", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [
+				{ content: ["FIRST ANSWER"], stopReason: "stop" },
+				{ content: ["INTERVENTION RESPONSE"], stopReason: "stop" },
+				{ content: ["SHOULD NOT RUN"], stopReason: "stop" },
+			],
+		});
+		// Advisor produces concern on first review AND another concern on second review
+		const advisorMock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "first concern", severity: "concern" } }] },
+				{ content: ["no further advice"], stopReason: "stop" },
+				// Second advisor review (during intervention turn) also produces a concern
+				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "second concern", severity: "concern" } }] },
+				{ content: ["advisor review complete"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false, "retry.enabled": false, "advisor.syncBacklog": "1",
+		});
+		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
+		authStorages.push(authStorage);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		session = new AgentSession({
+			agent, sessionManager, settings, modelRegistry,
+			advisorTools: [], advisorStreamFn: advisorMock.stream,
+		});
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("read five fixture files and answer with exactly one line");
+		await session.waitForIdle();
+
+		// First concern triggered an intervention turn; second concern was capped.
+		// Total: original turn + exactly one intervention turn = 2.
+		expect(mock.calls.length).toBe(2);
+
+		// Both concerns must be visible in the transcript.
+		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
+		const allText = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
+		expect(allText).toContain("first concern");
+		expect(allText).toContain("second concern");
 	});
 });
