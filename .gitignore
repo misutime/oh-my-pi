@@ -81,3 +81,9 @@ packages/coding-agent/bench/boot-baseline.json
 
 nul
 .codegraph/
+
+# Bazel build output
+/bazel-bin/
+/bazel-out/
+/bazel-testlogs/
+/bazel-oh-my-pi/
