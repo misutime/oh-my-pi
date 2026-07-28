@@ -363,6 +363,51 @@ export function resolveEffortCeiling(
 }
 
 /**
+ * Clamps a concrete thinking selector to a per-session effort ceiling (for
+ * example, a task spawn's `task.maxEffort`-capped effort hint). `off`,
+ * `inherit`, and `undefined` pass through. Levels above the ceiling snap to
+ * the highest model-supported effort at or below it. If the model's floor
+ * exceeds the ceiling, there is no valid lower level, so the caller must
+ * reject or skip that model (see {@link modelSupportsEffortCeiling}).
+ */
+export function clampThinkingLevelToCeiling(
+	model: Model | undefined,
+	level: Effort | undefined,
+	ceiling: Effort | undefined,
+): Effort | undefined;
+export function clampThinkingLevelToCeiling(
+	model: Model | undefined,
+	level: ThinkingLevel | undefined,
+	ceiling: Effort | undefined,
+): ThinkingLevel | undefined;
+export function clampThinkingLevelToCeiling(
+	model: Model | undefined,
+	level: ThinkingLevel | undefined,
+	ceiling: Effort | undefined,
+): ThinkingLevel | undefined {
+	if (ceiling === undefined || level === undefined || level === ThinkingLevel.Off || level === ThinkingLevel.Inherit) {
+		return level;
+	}
+	const maxIndex = THINKING_EFFORTS.indexOf(ceiling);
+	if (THINKING_EFFORTS.indexOf(level) <= maxIndex) return level;
+	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
+	return supported.findLast(candidate => THINKING_EFFORTS.indexOf(candidate) <= maxIndex) ?? level;
+}
+
+/**
+ * True when `model` can honor a thinking-effort ceiling: it either has no
+ * controllable effort surface, or supports at least one effort at or below the
+ * ceiling. Retry-fallback selection uses this to avoid models that would force
+ * the session above its configured ceiling.
+ */
+export function modelSupportsEffortCeiling(model: Model, ceiling: Effort): boolean {
+	const supported = getSupportedEfforts(model);
+	if (supported.length === 0) return true;
+	const maxIndex = THINKING_EFFORTS.indexOf(ceiling);
+	return supported.some(candidate => THINKING_EFFORTS.indexOf(candidate) <= maxIndex);
+}
+
+/**
  * The provisional concrete level shown while `auto` is configured but before a
  * turn has been classified. Prefers the model's `defaultLevel`, otherwise High,
  * clamped into the auto range. Auto never provisions {@link Effort.Max} (the
