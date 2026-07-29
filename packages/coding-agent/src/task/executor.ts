@@ -2778,7 +2778,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				modelPatternDefaultFallbackChain:
 					model || modelOverride === undefined ? undefined : defaultRetryFallbackChain,
 				thinkingLevel: effectiveThinkingLevel,
-				thinkingLevelCeiling: spawnEffortCeiling,
+				thinkingLevelCeiling: ceiling,
 				toolNames,
 				outputSchema,
 				outputSchemaMode: options.outputSchemaMode,
