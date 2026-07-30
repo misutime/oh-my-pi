@@ -93,6 +93,39 @@ const SUPPRESSED_NORMALIZED_PHRASES: Record<string, true> = {
 };
 
 /**
+ * Subset of suppression phrases that indicate a **positive clean review**
+ * ("no issues", "looks good", "LGTM"). Self-stop ("stop"/"halt") and
+ * completion self-talk ("done"/"ok") are excluded — they don't mean the
+ * review cleared.
+ */
+const CLEAR_REVIEW_PHRASES: Record<string, true> = {
+	"no issue": true,
+	"no issues": true,
+	"no issue continue": true,
+	"no concerns": true,
+	"no concern": true,
+	"nothing to add": true,
+	"nothing to flag": true,
+	"nothing to report": true,
+	"no notes": true,
+	"no further input": true,
+	"no further input needed": true,
+	"no further input required": true,
+	"no further watcher input": true,
+	"no further watcher input needed": true,
+	"no further advice": true,
+	"no further advice needed": true,
+	lgtm: true,
+	"looks good": true,
+	"all good": true,
+	"agent is on track": true,
+	"agent on track": true,
+	"on track": true,
+	continue: true,
+	"carry on": true,
+};
+
+/**
  * Bounds the dedupe history. Sessions with very long advisor activity could
  * otherwise grow the set without bound. The reporter's pathological session
  * had 92 unique notes; 4096 leaves headroom while staying tiny (≤ ~256 KB of
@@ -118,6 +151,8 @@ export class AdvisorEmissionGuard {
 	/** Insertion-order log to drive FIFO eviction without an extra Map. */
 	#seenOrder: string[] = [];
 	#consumedThisUpdate = false;
+	/** Whether a known noise/clear phrase was suppressed this update (no advice accepted). */
+	#noiseSeenThisUpdate = false;
 	readonly #capacity: number;
 
 	constructor(opts: { capacity?: number } = {}) {
@@ -134,6 +169,7 @@ export class AdvisorEmissionGuard {
 		this.#seen.clear();
 		this.#seenOrder.length = 0;
 		this.#consumedThisUpdate = false;
+		this.#noiseSeenThisUpdate = false;
 	}
 
 	/**
@@ -143,6 +179,7 @@ export class AdvisorEmissionGuard {
 	 */
 	beginUpdate(): void {
 		this.#consumedThisUpdate = false;
+		this.#noiseSeenThisUpdate = false;
 	}
 
 	/**
@@ -157,7 +194,10 @@ export class AdvisorEmissionGuard {
 	accept(note: string): boolean {
 		const key = normalizeAdvisorNote(note);
 		if (!key) return false;
-		if (SUPPRESSED_NORMALIZED_PHRASES[key]) return false;
+		if (SUPPRESSED_NORMALIZED_PHRASES[key]) {
+			if (CLEAR_REVIEW_PHRASES[key]) this.#noiseSeenThisUpdate = true;
+			return false;
+		}
 		if (this.#seen.has(key)) return false;
 		if (this.#consumedThisUpdate) return false;
 		this.#consumedThisUpdate = true;
@@ -168,5 +208,14 @@ export class AdvisorEmissionGuard {
 			if (stale !== undefined) this.#seen.delete(stale);
 		}
 		return true;
+	}
+	/** Whether this update observed only noise/clear phrases with no accepted advice. */
+	get noiseSeenThisUpdate(): boolean {
+		return this.#noiseSeenThisUpdate;
+	}
+
+	/** Whether this update has consumed its one-advise budget (a real concern was accepted). */
+	get consumedThisUpdate(): boolean {
+		return this.#consumedThisUpdate;
 	}
 }

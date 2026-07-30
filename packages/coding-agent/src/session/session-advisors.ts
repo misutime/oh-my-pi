@@ -875,6 +875,18 @@ export class SessionAdvisors {
 					if (!this.#advisors.some(a => a.pendingTerminalReviewIds.size > 0)) {
 						void this.#host.emitSessionEvent({ type: "advisor_reviews_changed", active: false });
 					}
+					// Batch produced only noise ("no issues"/"looks good") with no real concern accepted → show a compact ✓ card.
+					if (advisorRef.emissionGuard.noiseSeenThisUpdate && !advisorRef.emissionGuard.consumedThisUpdate) {
+						this.#host.preserveAdvisorCard({
+							role: "custom",
+							customType: "advisor",
+							content: "",
+							display: true,
+							attribution: "agent",
+							details: { notes: [{ note: "✓", advisor: advisorName }] } satisfies AdvisorMessageDetails,
+							timestamp: Date.now(),
+						});
+					}
 				},
 			});
 
