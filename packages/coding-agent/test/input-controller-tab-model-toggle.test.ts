@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
 // ── editor stub ───────────────────────────────────────────────
@@ -24,15 +24,21 @@ type FakeEditor = {
 function makeEditor(): FakeEditor {
 	let text = "";
 	return {
-		setText(t: string) { text = t; },
-		getText() { return text; },
+		setText(t: string) {
+			text = t;
+		},
+		getText() {
+			return text;
+		},
 		addToHistory: vi.fn(),
 		setActionKeys: vi.fn(),
 		setCustomKeyHandler: vi.fn(),
 		clearCustomKeyHandlers: vi.fn(),
 		pendingImages: [],
 		pendingImageLinks: [],
-		clearDraft() { text = ""; },
+		clearDraft() {
+			text = "";
+		},
 	};
 }
 
@@ -122,9 +128,7 @@ function makeHarness(tabCycleModels: string[]): Harness {
 	controller.setupKeyHandlers();
 
 	// setupKeyHandlers registers listeners in order. Grab the tab one (index 4).
-	const calls = addInputListener.mock.calls.map((c: unknown[]) => c[0]) as Array<
-		(data: string) => object | undefined
-	>;
+	const calls = addInputListener.mock.calls.map((c: unknown[]) => c[0]) as Array<(data: string) => object | undefined>;
 	const tab = calls[4]!;
 	return {
 		ctx: base,
@@ -307,7 +311,9 @@ describe("InputController Tab model cycle", () => {
 		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
 
 		// Replace setModelTemporary with a failing one
-		const failFn = vi.fn(async () => { throw new Error("auth required"); });
+		const failFn = vi.fn(async () => {
+			throw new Error("auth required");
+		});
 		(h.ctx.session as unknown as { setModelTemporary: unknown }).setModelTemporary = failFn;
 
 		h.tab("\t");

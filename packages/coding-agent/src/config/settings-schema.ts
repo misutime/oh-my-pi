@@ -505,19 +505,19 @@ export const SETTINGS_SCHEMA = {
 			condition: "advisorEnabled",
 		},
 	},
-"advisor.trigger": {
-	type: "enum",
-	values: ["always", "safe_tools"] as const,
-	default: "always",
-	ui: {
-		tab: "model",
-		group: "Advisor",
-		label: "Advisor Trigger",
-		description:
-			"When to trigger advisor review. 'always' reviews every turn. 'safe_tools' skips turns whose delta contains only read-only / bookkeeping tool calls (read, grep, glob, lsp, web_search, todo, hub, ask).",
-		condition: "advisorEnabled",
+	"advisor.trigger": {
+		type: "enum",
+		values: ["always", "safe_tools"] as const,
+		default: "always",
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Advisor Trigger",
+			description:
+				"When to trigger advisor review. 'always' reviews every turn. 'safe_tools' skips turns whose delta contains only read-only / bookkeeping tool calls (read, grep, glob, lsp, web_search, todo, hub, ask).",
+			condition: "advisorEnabled",
+		},
 	},
-},
 	shellPath: { type: "string", default: undefined },
 	"git.enabled": {
 		type: "boolean",
@@ -939,6 +939,18 @@ export const SETTINGS_SCHEMA = {
 			group: "Display",
 			label: "Render Mermaid Diagrams",
 			description: "Render Mermaid fenced code blocks as ASCII diagrams",
+		},
+	},
+
+	"tui.codexResetFireworks": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Codex Reset Fireworks",
+			description:
+				"Celebrate unscheduled Codex weekly usage resets and newly banked saved resets with a top-third fireworks overlay that remains until Escape",
 		},
 	},
 
@@ -1826,14 +1838,32 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	collapseChangelog: {
-		type: "boolean",
-		default: false,
+	"startup.changelogMode": {
+		type: "enum",
+		values: ["summary", "expanded", "hidden"] as const,
+		default: "summary",
 		ui: {
 			tab: "interaction",
 			group: "Startup & Updates",
-			label: "Collapse Changelog",
-			description: "Show condensed changelog after updates",
+			label: "Startup Changelog",
+			description: "Choose whether update notes start as a summary, full details, or stay hidden",
+			options: [
+				{
+					value: "summary",
+					label: "Summary",
+					description: "Show release and change counts with a /changelog hint",
+				},
+				{
+					value: "expanded",
+					label: "Expanded",
+					description: "Show the recent release notes in full",
+				},
+				{
+					value: "hidden",
+					label: "Hidden",
+					description: "Do not show release notes on startup",
+				},
+			],
 		},
 	},
 
@@ -4069,6 +4099,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"browser.cdpUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "tools",
+			group: "Grep & Browser",
+			label: "Browser CDP URL",
+			description:
+				"Default HTTP CDP discovery endpoint (for example http://127.0.0.1:9222) to attach to instead of launching a browser. Explicit app.cdp_url or app.path on the tool call take precedence.",
+		},
+	},
+
 	"browser.headless": {
 		type: "boolean",
 		default: true,
@@ -4607,7 +4649,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Subagents",
 			label: "Soft Subagent Request Budget",
 			description:
-				"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. Bundled scout/sonic agents use a lower built-in budget.",
+				"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. Bundled scout/sonic agents cap out at a lower built-in budget, so a value below that cap still applies to them.",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "90", label: "90 requests" },
@@ -4628,8 +4670,6 @@ export const SETTINGS_SCHEMA = {
 				"Inject one steering notice when a subagent crosses its soft request budget, asking it to wrap up before the 1.5x forced-yield stop.",
 		},
 	},
-
-	
 
 	"task.disabledAgents": {
 		type: "array",

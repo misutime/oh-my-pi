@@ -420,8 +420,8 @@ if (!napiBin) {
 // host Node installation); on Windows it is a native .exe (run directly — Bun
 // cannot parse a PE binary as JavaScript).
 function buildNapiCmd(): string[] {
-	if (process.platform === "win32") return [napiBin, ...napiArgs];
-	return [process.execPath, napiBin, ...napiArgs];
+	if (process.platform === "win32") return [napiBin!, ...napiArgs];
+	return [process.execPath, napiBin!, ...napiArgs];
 }
 
 async function runNapiBuildWithSccacheFallback() {

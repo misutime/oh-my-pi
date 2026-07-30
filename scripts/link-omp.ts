@@ -39,7 +39,9 @@ if (!globalBin) {
 fs.mkdirSync(globalBin, { recursive: true });
 
 const linkPath = path.join(globalBin, "omp");
-try { fs.unlinkSync(linkPath); } catch {}
+try {
+	fs.unlinkSync(linkPath);
+} catch {}
 fs.symlinkSync(target, linkPath);
 
 console.log(`link-omp: linked ${linkPath} -> ${target}`);

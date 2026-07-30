@@ -15,7 +15,7 @@ async function getCurrentBranch(api: CustomCommandAPI): Promise<string | undefin
 async function getRecentChanges(api: CustomCommandAPI): Promise<string | undefined> {
 	try {
 		const result = await api.exec("git", ["diff", "--stat", "HEAD~5..HEAD"], { cwd: api.cwd });
-		if (result.exitCode === 0 && result.stdout.trim()) {
+		if (result.code === 0 && result.stdout.trim()) {
 			return result.stdout.trim();
 		}
 	} catch {
@@ -32,10 +32,7 @@ export class ShifuCommand implements CustomCommand {
 
 	async execute(args: string[], _ctx: HookCommandContext): Promise<string> {
 		const problem = args.length > 0 ? args.join(" ") : undefined;
-		const [branch, recentChanges] = await Promise.all([
-			getCurrentBranch(this.api),
-			getRecentChanges(this.api),
-		]);
+		const [branch, recentChanges] = await Promise.all([getCurrentBranch(this.api), getRecentChanges(this.api)]);
 
 		return prompt.render(shifuRequestTemplate, {
 			problem,

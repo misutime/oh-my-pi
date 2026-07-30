@@ -34,6 +34,20 @@ The upstream provider modules remain in `packages/coding-agent/src/discovery/` d
 
 When merging upstream, retain this small policy layer and accept upstream changes to the dormant provider modules and their tests. Do not delete those files again. See `docs/omp-only-configuration.md` for the user-facing behavior.
 
+### Merge Safety Principle (最高原则)
+
+When merging upstream changes into this fork, this rule takes precedence over all other considerations:
+
+> **It is acceptable if upstream features are partially or entirely missing from the merge result.**
+> **It is unacceptable if OUR functionality is lost, broken, or regressed due to the merge.**
+
+In practice:
+- When a merge conflict involves code we wrote, the default resolution MUST preserve our logic. Only deviate when our change is objectively superseded and the replacement is verified equivalent.
+- The reviewer MUST flag every case where our code was removed, altered, or bypassed — regardless of intent.
+- Missing or incomplete upstream features are NOT defects and MUST NOT be reported as issues.
+- Before finalizing any merge, verify our key functions, methods, and behaviors are intact through both type-checking and runtime smoke tests.
+- The merge branch MUST NOT be merged into main until this verification is complete.
+
 **Catalog import convention**: code in this repo imports catalog *values* (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
 ## GitHub

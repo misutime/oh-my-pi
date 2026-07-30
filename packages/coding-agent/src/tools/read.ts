@@ -735,6 +735,10 @@ export interface ReadToolDetails {
 	method?: string;
 	notes?: string[];
 	meta?: OutputMeta;
+	/** Full source line count when the read reached EOF. */
+	totalLines?: number;
+	/** Full on-disk byte size recorded before applying a file range. */
+	fileSize?: number;
 	/** Raw text + start line for user-visible TUI rendering, set when content is text-like.
 	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
@@ -2724,7 +2728,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							totalFileLines === 0
 								? "The file is empty."
 								: `Use :1 to read from the start, or :${totalFileLines} to read the last line.`;
-						return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
+						return toolResult<ReadToolDetails>({
+							resolvedPath: absolutePath,
+							suffixResolution,
+							totalLines: reachedEof ? totalFileLines : undefined,
+						})
 							.text(
 								`Line ${requestedStart + 1} is beyond end of file (${totalFileLines} lines total). ${suggestion}`,
 							)
@@ -2954,11 +2962,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						}
 					}
 
+					if (reachedEof) details.totalLines = totalFileLines;
 					content = [{ type: "text", text: outputText }];
 				}
 			}
 		}
 
+		details.fileSize = fileSize;
 		this.#markMarkdownContentType(details, absolutePath);
 		if (suffixResolution) {
 			details.suffixResolution = suffixResolution;

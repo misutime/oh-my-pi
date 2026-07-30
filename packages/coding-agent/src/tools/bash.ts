@@ -785,7 +785,8 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 							latestText = tailBuffer.text();
 							void reportProgress(latestText, { async: { state: "running", jobId, type: "bash" } });
 						},
-						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText, artifactId, artifactPath),
+						onMinimizedSave: originalText =>
+							saveBashOriginalArtifact(this.session, originalText, artifactId, artifactPath),
 					});
 					const wallTimeMs = performance.now() - wallTimeStart;
 					const finalResult = await this.#buildCompletedResult(result, options.timeoutSec, {
@@ -1403,7 +1404,8 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 					artifactPath,
 					artifactId,
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
-					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText, artifactId, artifactPath),
+					onMinimizedSave: originalText =>
+						saveBashOriginalArtifact(this.session, originalText, artifactId, artifactPath),
 				});
 		const wallTimeMs = performance.now() - wallTimeStart;
 		if (result.cancelled) {

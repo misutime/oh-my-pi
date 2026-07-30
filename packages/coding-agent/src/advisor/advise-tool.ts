@@ -77,9 +77,8 @@ export function isInterruptingSeverity(severity: AdvisorSeverity | undefined): b
 
 /**
  * Append a staleness caveat to an advisor note when newer primary turns arrived
- * after the reviewed transcript window (i.e. `hasFreshBacklog` is true on the
- * advisor runtime at delivery time). Pure function — no session coupling — so it
- * can be unit-tested in isolation and called from `AgentSession#routeAdvice`.
+ * after the reviewed transcript window. Pure function — no session coupling —
+ * so it can be unit-tested in isolation and called from `SessionAdvisors`.
  */
 export function annotateForStaleness(note: string, hasFreshBacklog: boolean): string {
 	if (!hasFreshBacklog) return note;

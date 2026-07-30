@@ -310,10 +310,12 @@ export function resolveTaskEffortLevel(
 				break;
 			}
 		}
-		if (
-			effectiveCeiling !== undefined &&
-			THINKING_EFFORTS.indexOf(result) > THINKING_EFFORTS.indexOf(effectiveCeiling)
-		) {
+		if (effectiveCeiling === undefined) {
+			throw new Error(
+				`${model?.provider}/${model?.id} has no supported thinking effort at or below task.maxEffort=${ceiling}`,
+			);
+		}
+		if (THINKING_EFFORTS.indexOf(result) > THINKING_EFFORTS.indexOf(effectiveCeiling)) {
 			return effectiveCeiling;
 		}
 	}

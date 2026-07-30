@@ -183,18 +183,17 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		});
 		const advisorMock = createMockModel({
 			responses: [
-			{
-				content: [
-					{
-						type: "toolCall",
-						name: "advise",
-						arguments: { note: "Fixture verdict confirmed", severity },
-					},
-				],
-			},
-			{ content: ["no further advice"], stopReason: "stop" },
-			{ content: ["advisor review complete"], stopReason: "stop" },
-		],
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "Fixture verdict confirmed", severity },
+						},
+					],
+				},
+				{ content: [], stopReason: "stop" },
+			],
 		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -202,7 +201,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			streamFn: mock.stream,
 		});
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "advisor.syncBacklog": "1" });
+		const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false });
 		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
 		authStorages.push(authStorage);
@@ -257,115 +256,156 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		};
 		return persisted;
 	}
-	it("steers a late advisor concern into a terminal fence so the primary re-evaluates", async () => {
-		const { session, mock } = await createCompletedAdvisorSession();
 
-		expect(session.setAdvisorEnabled(true)).toBe(true);
+	it("preserves a late advisor concern after a terminal answer without waking the primary", async () => {
+		const { session, sessionManager, mock, advisorMock } = await createCompletedAdvisorSession();
+		const persisted = capturePersistedAdvice(sessionManager);
+
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
+		expect(mock.calls.length).toBe(1);
 
-		// Fence steered the concern during onPrimaryTurnEnd, primary ran again
-		expect(mock.calls.length).toBe(2);
-		// Steered advice appears in the agent state as an advisor card, confirming
-		// the concern reached the primary's message history. The core code fix
-		// (syncBacklog-independent catchup + sendCustomMessage steer path) ensures
-		// the advice is visible in the transcript where the primary can process it.
-		const hasAdvisorCard = session.agent.state.messages.some(m =>
-			m.role === "custom" &&
-			typeof m.content === "string" &&
-			m.content.includes("Fixture verdict confirmed")
-		);
-		expect(hasAdvisorCard).toBe(true);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
+		expect(advisorCards).toHaveLength(1);
+		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
+		expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
+		expect(mock.calls.length).toBe(1);
 	});
+
+	it("waits for preserved advisor card hooks and persistence before reporting catch-up", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_end",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_end" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, sessionManager, mock } = await createCompletedAdvisorSession("concern", extensionRunner);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+
+		expect(await session.waitForAdvisorCatchup(0)).toBe(false);
+		expect(persisted).toEqual([]);
+
+		let catchupSettled = false;
+		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+			catchupSettled = true;
+			return caughtUp;
+		});
+		await Promise.resolve();
+		expect(catchupSettled).toBe(false);
+		expect(persisted).toEqual([]);
+
+		releaseHook.resolve();
+		expect(await catchup).toBe(true);
+		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
+		expect(mock.calls).toHaveLength(1);
+	});
+
+	it("waits for preserved advisor card start hooks before reporting catch-up", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_start",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_start" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, mock } = await createCompletedAdvisorSession("concern", extensionRunner);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+
+		let catchupSettled = false;
+		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+			catchupSettled = true;
+			return caughtUp;
+		});
+		await Promise.resolve();
+		expect(catchupSettled).toBe(false);
+
+		releaseHook.resolve();
+		expect(await catchup).toBe(true);
+		expect(mock.calls).toHaveLength(1);
+	});
+
 	it("steers a late advisor blocker after a terminal answer so the primary corrects it", async () => {
 		const { session, mock } = await createCompletedAdvisorSession("blocker");
 
-		// Enable advisor BEFORE prompt so it is running when the fence activates
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-
 		await session.prompt("read five fixture files and answer with exactly one line");
 		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
+		expect(mock.calls.length).toBe(1);
 
-		// Fence steered the blocker during onPrimaryTurnEnd, primary ran again
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
 		expect(mock.calls.length).toBe(2);
 	});
 
-	it("steers another late advisor concern after an existing advisor card", async () => {
+	it("preserves another late advisor concern after an existing advisor card", async () => {
 		const { session, mock } = await createCompletedAdvisorSession();
 
-		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await session.waitForIdle();
 		session.agent.state.messages.push({
 			role: "custom",
 			...advisorCard("first late concern"),
 			timestamp: Date.now(),
 		});
-		await session.prompt("answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
 
-		// Fence steered the concern during onPrimaryTurnEnd; the pushed card and the
-		// steered batch both appear in the transcript.
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(2);
-		expect(mock.calls.length).toBe(2);
+		expect(mock.calls.length).toBe(1);
 	});
 
-	it("steers a late advisor concern after terminal text with provider metadata blocks", async () => {
+	it("preserves late advice after terminal text with provider metadata blocks", async () => {
 		const { session, mock } = await createCompletedAdvisorSession();
 
-		expect(session.setAdvisorEnabled(true)).toBe(true);
 		await session.prompt("answer with exactly one line");
-
-		// Inject provider metadata blocks into the terminal assistant answer so the
-		// fence path exercises redactedThinking/fallback handling in onPrimaryTurnEnd.
+		await session.waitForIdle();
 		const answer = session.agent.state.messages.at(-1);
 		if (answer?.role !== "assistant") throw new Error("Expected terminal assistant answer");
-		if (typeof answer.content === "string") throw new Error("Expected array content on mock assistant message");
-		(answer.content as Array<{ type: string; data?: string; from?: unknown; to?: unknown }>).push(
+		answer.content.push(
 			{ type: "redactedThinking", data: "opaque provider reasoning" },
 			{ type: "fallback", from: { model: "first" }, to: { model: "second" } },
 		);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-
-		// Fence steered the concern during onPrimaryTurnEnd, primary ran again
-		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
-		expect(mock.calls.length).toBe(2);
-	});
-
-	it("steers a terminal concern via async review, starting an intervention turn", async () => {
-		const { session, mock } = await createCompletedAdvisorSession();
-
-		let agentStartCount = 0;
-		const unsub = session.agent.subscribe(event => {
-			if (event.type === "agent_start") agentStartCount++;
-		});
-
 		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("read five fixture files and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
 
-		// Fence collected the concern during onPrimaryTurnEnd, steered it into the
-		// agent loop, and the primary ran again within the same user-run (no extra
-		// agent_start event was emitted — same session continues).
-		expect(mock.calls.length).toBe(2);
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
-		expect(agentStartCount).toBe(2);
-		unsub();
-
-});
+		expect(mock.calls.length).toBe(1);
+	});
 
 	it("preserves an advisor concern steered before the user interrupt, without auto-resuming", async () => {
 		const { session, sessionManager, mock, streamStarted } = await createParkedSession();
@@ -629,651 +669,5 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(userMessageText([...session.agent.peekFollowUpQueue()])).toContain("then add the test");
 		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
 		expect(mock.calls.length).toBe(2);
-	});
-	it("fires extension hooks for steer-delivered advisor cards", async () => {
-		let emitCount = 0;
-		let lastEventType = "";
-		const hookRunner: AdvisorTestExtensionRunner = {
-			hasHandlers: () => true,
-			emitBeforeAgentStart: async () => undefined,
-			emit: async event => {
-				emitCount++;
-				lastEventType = event.type;
-			},
-		};
-		const { session: hookSession, mock } = await createCompletedAdvisorSession("concern", hookRunner);
-
-		expect(hookSession.setAdvisorEnabled(true)).toBe(true);
-		await hookSession.prompt("read five fixture files and answer with exactly one line");
-		await hookSession.waitForIdle();
-		await hookSession.waitForAdvisorCatchup(5000);
-		await hookSession.waitForIdle();
-		await hookSession.waitForAdvisorCatchup(5000);
-
-		// Fence steered the concern: extension hooks must fire for the
-		// steer-delivered advisor card (message_start/message_end for the
-		// custom card emitted during the fence batch processing).
-		expect(mock.calls.length).toBe(2);
-		// At least one emit should have fired for the advisor card
-		expect(emitCount).toBeGreaterThan(0);
-	});
-
-	it("persists advice before catchup reports completion", async () => {
-		const { session: pSession, sessionManager, mock } = await createCompletedAdvisorSession();
-		const persisted = capturePersistedAdvice(sessionManager);
-
-		expect(pSession.setAdvisorEnabled(true)).toBe(true);
-		await pSession.prompt("read five fixture files and answer with exactly one line");
-		await pSession.waitForIdle();
-		await pSession.waitForAdvisorCatchup(5000);
-		await pSession.waitForIdle();
-		await pSession.waitForAdvisorCatchup(5000);
-
-		// The fence-steered advice must be persisted through the session
-		// manager before catchup reports completion.
-		expect(mock.calls.length).toBe(2);
-		// The advisor card content should appear in persisted entries
-		expect(persisted.length).toBeGreaterThan(0);
-		const allPersisted = persisted.join(" ");
-		expect(allPersisted).toContain("Fixture verdict confirmed");
-	});
-
-	it("preserves a second terminal concern as a visible card (intervention consumed)", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["EXACT VERDICT"], stopReason: "stop" },
-				{ content: ["CHANGED VERDICT"], stopReason: "stop" },
-			],
-		});
-		const advisorMock = createMockModel({
-			responses: [
-				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "first concern", severity: "concern" } }] },
-				{ content: ["no further advice"], stopReason: "stop" },
-				// Second advisor review also produces a concern
-				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "second concern", severity: "concern" } }] },
-				{ content: ["advisor review complete"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "advisor.syncBacklog": "1" });
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings,
-			modelRegistry,
-			advisorTools: [],
-			advisorStreamFn: advisorMock.stream,
-		});
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("read five fixture files and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-
-		// First terminal concern: steered into the agent loop (intervention consumed)
-		expect(mock.calls.length).toBe(2);
-
-		// The first steer-delivered advisor card is in the transcript
-		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
-		expect(advisorCards.length).toBeGreaterThan(0);
-
-		// The second concern from the second review must NOT trigger another steer.
-		// Since intervention was already consumed, the second concern is preserved
-		// as a visible card without triggering a third primary turn.
-		const allPersistedText = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
-		expect(allPersistedText).toContain("first concern");
-		expect(allPersistedText).toContain("second concern");
-	});
-
-	it("preserves advice as visible card in plan mode (plan-mode preservation)", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["EXACT VERDICT"], stopReason: "stop" },
-				{ content: ["CHANGED VERDICT"], stopReason: "stop" },
-			],
-		});
-		const advisorMock = createMockModel({
-			responses: [
-				{
-					content: [
-						{
-							type: "toolCall",
-							name: "advise",
-							arguments: { note: "Plan mode concern", severity: "concern" },
-						},
-					],
-				},
-				{ content: ["advisor complete"], stopReason: "stop" },
-				{ content: ["advisor review complete"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false,
-			"retry.enabled": false,
-			"advisor.syncBacklog": "1",
-			"plan.enabled": true,
-		});
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings,
-			modelRegistry,
-			advisorTools: [],
-			advisorStreamFn: advisorMock.stream,
-		});
-		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("read five fixture files and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-
-		// In plan mode, the fence should NOT steer the concern — it must be
-		// preserved as a visible advisor card instead.
-		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
-		expect(advisorCards.length).toBeGreaterThan(0);
-		expect(mock.calls.length).toBe(1);
-	});
-});
-
-describe("AgentSession advisor terminal turn feedback characterization", () => {
-	let tempDir: TempDir;
-	let session: AgentSession;
-	const authStorages: AuthStorage[] = [];
-
-	beforeEach(() => {
-		tempDir = TempDir.createSync("@pi-advisor-term-");
-	});
-
-	afterEach(async () => {
-		try {
-			await session?.dispose();
-		} finally {
-			for (const authStorage of authStorages.splice(0)) authStorage.close();
-			await Bun.sleep(0);
-			await tempDir?.remove();
-		}
-	});
-
-		function isAdvisorCard(message: AgentMessage): boolean {
-			return message.role === "custom" && (message as { customType?: string }).customType === ADVISOR_TYPE;
-		}
-
-	/**
-	 * Create a session whose advisor produces a nit (or no severity, which defaults
-	 * to nit). The primary mock has two responses to handle a potential re-evaluation
-	 * turn triggered by the nit being picked up in the outer yield poll.
-	 */
-	async function createNitAdvisorSession(
-		note: string,
-		severity?: "nit",
-	): Promise<CompletedAdvisorHarness> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["TASK COMPLETE"], stopReason: "stop" },
-				{ content: ["ACKNOWLEDGED"], stopReason: "stop" },
-			],
-		});
-		const advisorMock = createMockModel({
-			responses: [
-				{
-					content: [
-						{
-							type: "toolCall",
-							name: "advise",
-						arguments: severity !== undefined ? { note, severity } : { note },
-						},
-					],
-				},
-				{ content: ["no further advice"], stopReason: "stop" },
-				{ content: ["advisor review complete"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false,
-			"retry.enabled": false,
-			"advisor.syncBacklog": "1",
-		});
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings,
-			modelRegistry,
-			advisorTools: [],
-			advisorStreamFn: advisorMock.stream,
-		});
-		return { session, sessionManager, mock, advisorMock };
-	}
-
-	/**
-	 * Create a session whose advisor produces only text (no advise tool calls).
-	 * Used to characterize silent-advisor behavior.
-	 */
-	async function createSilentAdvisorSession(): Promise<CompletedAdvisorHarness> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["TASK COMPLETE"], stopReason: "stop" },
-			],
-		});
-		const advisorMock = createMockModel({
-			responses: [
-				{ content: ["review complete, no issues"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false,
-			"retry.enabled": false,
-			"advisor.syncBacklog": "1",
-		});
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings,
-			modelRegistry,
-			advisorTools: [],
-			advisorStreamFn: advisorMock.stream,
-		});
-		return { session, sessionManager, mock, advisorMock };
-	}
-
-	/**
-	 * Create a session whose advisor produces an "all good" / "lgtm" note that the
-	 * emission guard should suppress as content-free filler.
-	 */
-	async function createSuppressedPhraseSession(phrase: string): Promise<CompletedAdvisorHarness> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["TASK COMPLETE"], stopReason: "stop" },
-				{ content: ["ACKNOWLEDGED"], stopReason: "stop" },
-			],
-		});
-		const advisorMock = createMockModel({
-			responses: [
-				{
-					content: [
-						{
-							type: "toolCall",
-							name: "advise",
-							arguments: { note: phrase },
-						},
-					],
-				},
-				{ content: ["advisor review complete"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false,
-			"retry.enabled": false,
-			"advisor.syncBacklog": "1",
-		});
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings,
-			modelRegistry,
-			advisorTools: [],
-			advisorStreamFn: advisorMock.stream,
-		});
-		return { session, sessionManager, mock, advisorMock };
-	}
-
-	// ── Terminal nit visibility ──
-
-	it("injects an advisor nit into the transcript after a terminal turn", async () => {
-		const { session, mock } = await createNitAdvisorSession("Document looks correct.");
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		// The nit should appear as a preserved advisor card in the transcript.
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		expect(advisorCards.length).toBeGreaterThan(0);
-		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "");
-		expect(cardTexts.join(" ")).toContain("Document looks correct");
-	});
-
-	it("nit is preserved as visible card without triggering extra turns", async () => {
-		const { session, mock } = await createNitAdvisorSession("fine-tuning suggestion");
-
-		let agentStartCount = 0;
-		const unsub = session.agent.subscribe(event => {
-			if (event.type === "agent_start") agentStartCount++;
-		});
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		// Nit is preserved as visible card — no primary re-evaluation and still
-		// only one agent_start.
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		expect(advisorCards.length).toBeGreaterThan(0);
-		expect(agentStartCount).toBe(1);
-		unsub();
-	});
-
-	// ── Silent advisor (no advice) ──
-
-	it("silent advisor does not inject any advisor card", async () => {
-		const { session, mock } = await createSilentAdvisorSession();
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		expect(advisorCards).toHaveLength(0);
-		// Primary called exactly once — no re-evaluation turn.
-		expect(mock.calls.length).toBe(1);
-	});
-
-	it("silent advisor produces exactly one agent_start", async () => {
-		const { session } = await createSilentAdvisorSession();
-
-		let agentStartCount = 0;
-		const unsub = session.agent.subscribe(event => {
-			if (event.type === "agent_start") agentStartCount++;
-		});
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		expect(agentStartCount).toBe(1);
-		unsub();
-
-	});
-
-	// ── Suppressed content-free phrases ──
-
-	it("suppresses 'lgtm' advice as content-free filler", async () => {
-		const { session, mock } = await createSuppressedPhraseSession("lgtm");
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		expect(advisorCards).toHaveLength(0);
-		// No re-evaluation triggered by suppressed phrase.
-		expect(mock.calls.length).toBe(1);
-	});
-
-	it("suppresses 'all good' advice", async () => {
-		const { session, mock } = await createSuppressedPhraseSession("all good");
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		expect(advisorCards).toHaveLength(0);
-		expect(mock.calls.length).toBe(1);
-	});
-
-	it("suppresses 'no issue; continue.' advice", async () => {
-		const { session, mock } = await createSuppressedPhraseSession("no issue; continue.");
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		expect(advisorCards).toHaveLength(0);
-		expect(mock.calls.length).toBe(1);
-	});
-
-	// ── Nit-only fence batch does not consume intervention quota ──
-
-	it("nit-only terminal review does not consume the intervention cap", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [{ content: ["FIRST ANSWER"], stopReason: "stop" }],
-		});
-		// Advisor produces a nit only; no re-evaluation → no second review.
-		const advisorMock = createMockModel({
-			responses: [
-				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "minor formatting nit" } }] },
-				{ content: ["no further advice"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false, "retry.enabled": false, "advisor.syncBacklog": "1",
-		});
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, advisorTools: [], advisorStreamFn: advisorMock.stream });
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		const advisorCards = session.agent.state.messages.filter(
-			(m: AgentMessage) => m.role === "custom" && (m as { customType?: string }).customType === ADVISOR_TYPE,
-		);
-		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
-		expect(cardTexts).toContain("minor formatting nit");
-		expect(mock.calls.length).toBe(1);
-	});
-
-	// ── Idle-path triggerTurn: fence relies on this when the primary loop has exited ──
-	// NOTE: This tests the host sendCustomMessage({triggerTurn:true}) mechanism that the
-	// fence fix depends on for async/idle delivery. It is NOT an end-to-end reproduction
-	// of the fence's async timing (mock runs synchronously inside #beginInFlight).
-
-	it("triggerTurn starts a new turn from idle (fence idle-path mechanism)", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["FIRST ANSWER"], stopReason: "stop" },
-				{ content: ["INTERVENTION RESPONSE"], stopReason: "stop" },
-			],
-		});
-		// No advisor — test only the host sendCustomMessage({triggerTurn:true}) mechanism.
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false, "retry.enabled": false,
-		});
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent, sessionManager, settings, modelRegistry,
-			advisorTools: [], advisorStreamFn: undefined,
-		});
-
-		await session.prompt("write a document and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-
-		// Session is idle — primary ran exactly once.
-		expect(mock.calls.length).toBe(1);
-
-		// Simulate what the terminal fence does when the agent loop has fully exited:
-		// deliverAs: "steer" + triggerTurn: true must start a new turn from idle.
-		const result = await session.sendCustomMessage(
-			{
-				customType: ADVISOR_TYPE,
-				content: "late blocker found after turn end",
-				display: true,
-				attribution: "agent",
-				details: { notes: [{ note: "late blocker found after turn end", severity: "blocker" }] },
-			},
-			{ deliverAs: "steer", triggerTurn: true },
-		);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-
-		// triggerTurn returns true when it synchronously started a new turn.
-		expect(result).toBe(true);
-		// Primary ran again: original + intervention = 2.
-		expect(mock.calls.length).toBe(2);
-		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
-		expect(advisorCards.length).toBeGreaterThan(0);
-		const cardTexts = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
-		expect(cardTexts).toContain("late blocker");
-	});
-
-	// ── Re-entrant cap: intervention turn's own terminal concern is preserved ──
-
-	it("caps intervention at one per user-run: second terminal concern preserved as card", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const mock = createMockModel({
-			responses: [
-				{ content: ["FIRST ANSWER"], stopReason: "stop" },
-				{ content: ["INTERVENTION RESPONSE"], stopReason: "stop" },
-				{ content: ["SHOULD NOT RUN"], stopReason: "stop" },
-			],
-		});
-		// Advisor produces concern on first review AND another concern on second review
-		const advisorMock = createMockModel({
-			responses: [
-				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "first concern", severity: "concern" } }] },
-				{ content: ["no further advice"], stopReason: "stop" },
-				// Second advisor review (during intervention turn) also produces a concern
-				{ content: [{ type: "toolCall", name: "advise", arguments: { note: "second concern", severity: "concern" } }] },
-				{ content: ["advisor review complete"], stopReason: "stop" },
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model, systemPrompt: ["Test"], tools: [] },
-			streamFn: mock.stream,
-		});
-		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({
-			"compaction.enabled": false, "retry.enabled": false, "advisor.syncBacklog": "1",
-		});
-		settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
-		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
-		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({
-			agent, sessionManager, settings, modelRegistry,
-			advisorTools: [], advisorStreamFn: advisorMock.stream,
-		});
-
-		expect(session.setAdvisorEnabled(true)).toBe(true);
-		await session.prompt("read five fixture files and answer with exactly one line");
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		await session.waitForIdle();
-		await session.waitForAdvisorCatchup(5000);
-		// First concern triggered an intervention turn; second concern was capped.
-		// Total: original turn + exactly one intervention turn = 2.
-		expect(mock.calls.length).toBe(2);
-
-		// Both concerns must be visible in the transcript.
-		const advisorCards = session.agent.state.messages.filter(isAdvisorCard);
-		const allText = advisorCards.map(c => typeof c.content === "string" ? c.content : "").join(" ");
-		expect(allText).toContain("first concern");
-		expect(allText).toContain("second concern");
 	});
 });

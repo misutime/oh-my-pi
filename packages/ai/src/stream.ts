@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl, resolveVertexEndpointHost } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	mapEffortToAnthropicAdaptiveEffort,
 	mapEffortToGoogleThinkingLevel,
@@ -130,7 +130,7 @@ function isOfficialOpenAIApiUrl(baseUrl: string | undefined): boolean {
 }
 
 /** Strict official-Codex endpoint check; exact origin or a path boundary after {@link CODEX_BASE_URL}. */
-function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
+export function isOfficialCodexApiUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return true;
 	const lower = baseUrl.toLowerCase().replace(/\/+$/, "");
 	return lower === CODEX_BASE_URL || lower.startsWith(`${CODEX_BASE_URL}/`);
@@ -662,7 +662,7 @@ function resolveVertexRequest(input: string | URL | Request): string | URL | Req
 			url.includes("{location}") ||
 			url.includes("%7Bproject%7D") ||
 			url.includes("%7Blocation%7D");
-		const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+		const host = resolveVertexEndpointHost(location);
 		const rewritten = hasPlaceholder
 			? url
 					.replace("https://{location}-aiplatform.googleapis.com", `https://${host}`)
@@ -691,7 +691,6 @@ type KeyResolver = string | (() => string | undefined);
 const LEGACY_ENV_KEYS: Record<string, KeyResolver> = {
 	// Non-provider / search-tool keys and API-name keys not modeled as registry provider defs.
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
-	exa: "EXA_API_KEY",
 	jina: "JINA_API_KEY",
 	brave: "BRAVE_API_KEY",
 	tinyfish: "TINYFISH_API_KEY",
