@@ -582,6 +582,8 @@ export const SETTINGS_SCHEMA = {
 
 	cycleOrder: { type: "array", default: DEFAULT_CYCLE_ORDER },
 
+	tabCycleModels: { type: "array", default: EMPTY_STRING_ARRAY },
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Appearance
 	// ────────────────────────────────────────────────────────────────────────
@@ -5744,6 +5746,7 @@ export interface GroupTypeMap {
 	modelRoles: Record<string, string>;
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];
+	tabCycleModels: string[];
 	shellMinimizer: ShellMinimizerSettings;
 	codexResets: CodexResetsSettings;
 	gc: GcSettings;

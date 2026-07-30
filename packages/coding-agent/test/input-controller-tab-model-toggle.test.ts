@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
@@ -38,12 +39,15 @@ function makeEditor(): FakeEditor {
 // ── fixture ───────────────────────────────────────────────────
 
 let dfModel: ReturnType<typeof getBundledModel>;
-let adModel: ReturnType<typeof getBundledModel>;
+let extModel1: ReturnType<typeof getBundledModel>;
+let extModel2: ReturnType<typeof getBundledModel>;
 
 beforeEach(async () => {
 	await Settings.init({ inMemory: true });
-	dfModel = getBundledModel("openai", "gpt-5.2");
-	adModel = getBundledModel("anthropic", "claude-sonnet-4-6");
+	initTheme();
+	dfModel = getBundledModel("openai", "gpt-4o");
+	extModel1 = getBundledModel("anthropic", "claude-sonnet-4-6");
+	extModel2 = getBundledModel("google", "gemini-2.5-flash");
 });
 
 afterEach(() => {
@@ -56,22 +60,20 @@ interface Harness {
 	/** Drain the microtask queue so `void asyncMethod()` work settles. */
 	flush(): Promise<void>;
 	setModelTemporary: ReturnType<typeof vi.fn>;
-	setAdvisorEnabled: ReturnType<typeof vi.fn>;
 	session: Record<string, unknown>;
 }
 
-function makeHarness(advisorEnabled: boolean): Harness {
+function makeHarness(tabCycleModels: string[]): Harness {
 	const editor = makeEditor();
 	const addInputListener = vi.fn();
 	const setModelTemporary = vi.fn(async () => {});
 	const setAdvisorEnabled = vi.fn();
-	const isAdvisorEnabled = vi.fn(() => advisorEnabled);
 
 	const session = {
 		model: dfModel,
-		modelRegistry: { getAvailable: () => [dfModel, adModel] },
+		modelRegistry: { getAvailable: () => [dfModel, extModel1, extModel2] },
 		setModelTemporary,
-		isAdvisorEnabled,
+		isAdvisorEnabled: vi.fn(() => false),
 		setAdvisorEnabled,
 	} as unknown as InteractiveModeContext["session"];
 
@@ -91,6 +93,7 @@ function makeHarness(advisorEnabled: boolean): Harness {
 		updateEditorBorderColor: vi.fn(),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
+		showModelCycleTrack: vi.fn(),
 		focusedAgentId: null,
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
@@ -111,11 +114,14 @@ function makeHarness(advisorEnabled: boolean): Harness {
 		isPythonMode: false,
 	} as unknown as InteractiveModeContext;
 
+	// Set the default model role + tab cycle models in settings
+	Settings.instance.override("modelRoles", { default: "openai/gpt-4o" });
+	Settings.instance.override("tabCycleModels", tabCycleModels);
+
 	const controller = new InputController(base);
 	controller.setupKeyHandlers();
 
-	// setupKeyHandlers registers: [0] left-tap, [1] focused-paste, [2] btw-branch,
-	// [3] btw-copy, [4] tab-model-toggle, [5] enhanced-paste. Grab index 4 explicitly.
+	// setupKeyHandlers registers listeners in order. Grab the tab one (index 4).
 	const calls = addInputListener.mock.calls.map((c: unknown[]) => c[0]) as Array<
 		(data: string) => object | undefined
 	>;
@@ -127,177 +133,196 @@ function makeHarness(advisorEnabled: boolean): Harness {
 			for (let i = 0; i < 4; i++) await Promise.resolve();
 		},
 		setModelTemporary,
-		setAdvisorEnabled,
 		session: session as unknown as Record<string, unknown>,
 	};
 }
 
-const ROLES = { default: "openai/gpt-5.2", advisor: "anthropic/claude-sonnet-4-6" };
-
 // ── tests ─────────────────────────────────────────────────────
 
-describe("InputController Tab model toggle with advisor", () => {
-	it("switches to advisor model and disables advisor", async () => {
-		Settings.instance.override("modelRoles", ROLES);
-		const h = makeHarness(true);
+describe("InputController Tab model cycle", () => {
+	it("does nothing when tabCycleModels is empty", async () => {
+		const h = makeHarness([]);
 
-		h.tab("\t");
+		const result = h.tab("\t");
 		await h.flush();
 
-		expect(h.setModelTemporary.mock.calls[0][0]).toMatchObject({ provider: adModel.provider, id: adModel.id });
-		expect(h.setAdvisorEnabled).toHaveBeenCalledWith(false);
+		// Tab is consumed (listener returns { consume: true }) but no model switch happens
+		expect(result).toEqual({ consume: true });
+		expect(h.setModelTemporary).not.toHaveBeenCalled();
 	});
 
-	it("returns to default model and restores advisor", async () => {
-		Settings.instance.override("modelRoles", ROLES);
-		const h = makeHarness(true);
+	it("cycles default → extra on each Tab with one extra model", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
 
-		h.tab("\t"); await h.flush();
-		h.session.model = adModel;
+		// Tab 1: default → extra
+		h.tab("\t");
+		await h.flush();
+		expect(h.setModelTemporary.mock.calls.length).toBe(1);
+		expect(h.setModelTemporary.mock.calls[0][0]).toMatchObject({
+			provider: extModel1.provider,
+			id: extModel1.id,
+		});
 
-		h.tab("\t"); await h.flush();
-
+		// Tab 2: extra → default
+		h.session.model = extModel1;
+		h.tab("\t");
+		await h.flush();
 		expect(h.setModelTemporary.mock.calls.length).toBe(2);
 		expect(h.setModelTemporary.mock.calls[1][0]).toMatchObject({
 			provider: dfModel.provider,
 			id: dfModel.id,
 		});
-		expect(h.setAdvisorEnabled).toHaveBeenCalledWith(true);
-	});
 
-	it("does not restore advisor when it was already off", async () => {
-		Settings.instance.override("modelRoles", ROLES);
-		const h = makeHarness(false);
-
-		h.tab("\t"); await h.flush();
-		h.session.model = adModel;
-
-		h.tab("\t"); await h.flush();
-
-		expect(h.setModelTemporary.mock.calls.length).toBe(2);
-		expect(h.setAdvisorEnabled).toHaveBeenCalledWith(false);
-		expect(h.setAdvisorEnabled).not.toHaveBeenCalledWith(true);
-	});
-
-	it("cycles advisor on/off in same session (regression: third entry snapshot)", async () => {
-		Settings.instance.override("modelRoles", ROLES);
-		const h = makeHarness(true);
-
-		// Cycle 1
-		h.tab("\t"); await h.flush();
-		expect(h.setAdvisorEnabled).toHaveBeenCalledWith(false);
-		h.session.model = adModel;
-
-		h.tab("\t"); await h.flush();
-		expect(h.setAdvisorEnabled).toHaveBeenCalledWith(true);
+		// Tab 3: default → extra again
 		h.session.model = dfModel;
-
-		// Cycle 2 — regression: must capture snapshot on re-entry
-		h.tab("\t"); await h.flush();
-		const advisorCalls = (h.setAdvisorEnabled as unknown as { mock: { calls: Array<[boolean]> } }).mock.calls;
-		expect(advisorCalls.filter(([v]) => v === false).length).toBe(2);
-		h.session.model = adModel;
-
-		h.tab("\t"); await h.flush();
-		expect(advisorCalls.filter(([v]) => v === true).length).toBe(2);
+		h.tab("\t");
+		await h.flush();
+		expect(h.setModelTemporary.mock.calls.length).toBe(3);
+		expect(h.setModelTemporary.mock.calls[2][0]).toMatchObject({
+			provider: extModel1.provider,
+			id: extModel1.id,
+		});
 	});
 
-	it("no-op when no advisor model is configured", async () => {
-		const h = makeHarness(true);
+	it("cycles through three models with two extras", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6", "google/gemini-2.5-flash"]);
+
+		// Tab 1: default → extra1
+		h.tab("\t");
+		await h.flush();
+		expect(h.setModelTemporary.mock.calls[0][0]).toMatchObject({
+			provider: extModel1.provider,
+			id: extModel1.id,
+		});
+
+		// Tab 2: extra1 → extra2
+		h.session.model = extModel1;
+		h.tab("\t");
+		await h.flush();
+		expect(h.setModelTemporary.mock.calls[1][0]).toMatchObject({
+			provider: extModel2.provider,
+			id: extModel2.id,
+		});
+
+		// Tab 3: extra2 → default
+		h.session.model = extModel2;
+		h.tab("\t");
+		await h.flush();
+		expect(h.setModelTemporary.mock.calls[2][0]).toMatchObject({
+			provider: dfModel.provider,
+			id: dfModel.id,
+		});
+	});
+
+	it("shows cycle track after each advance", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
+
+		h.tab("\t");
+		await h.flush();
+		expect(h.ctx.showModelCycleTrack).toHaveBeenCalled();
+
+		const track = (h.ctx.showModelCycleTrack as ReturnType<typeof vi.fn>).mock.calls[0][0];
+		expect(typeof track).toBe("string");
+		expect(track.length).toBeGreaterThan(0);
+	});
+
+	it("starts from default when current model is not in cycle", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
+
+		// Set session to a model not in the cycle (use a real bundled model)
+		const unknownModel = getBundledModel("openai", "gpt-4o-mini");
+		h.session.model = unknownModel;
 
 		h.tab("\t");
 		await h.flush();
 
-		expect(h.ctx.showStatus as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("No advisor model configured");
+		// Should advance to extra (position 1 in [default, extra])
+		expect(h.setModelTemporary.mock.calls[0][0]).toMatchObject({
+			provider: extModel1.provider,
+			id: extModel1.id,
+		});
+	});
+
+	it("shows status when tabCycleModels empty and only default exists in cycle", async () => {
+		const h = makeHarness([]);
+
+		h.tab("\t");
+		await h.flush();
+
 		expect(h.setModelTemporary).not.toHaveBeenCalled();
 	});
-	it("does not corrupt snapshot when model switch fails", async () => {
-		Settings.instance.override("modelRoles", ROLES);
-		const editor = makeEditor();
-		const addInputListener = vi.fn();
-		let advisorEnabled = true;
-		let failSwitch = true;
-		const setModelTemporary = vi.fn<() => Promise<void>>(async () => {
-			if (failSwitch) throw new Error("model unavailable");
+
+	it("shows status when extra models duplicate the default", async () => {
+		// Extra model string matches default — cycle has length 1 after dedup
+		const h = makeHarness(["openai/gpt-4o"]);
+
+		h.tab("\t");
+		await h.flush();
+
+		expect(h.setModelTemporary).not.toHaveBeenCalled();
+		expect(h.ctx.showStatus).toHaveBeenCalledWith("No resolvable extra models for Tab cycle");
+	});
+
+	it("falls back to current model when default role is unset", async () => {
+		// Create harness, then clear the default role
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
+		Settings.instance.setModelRole("default", undefined);
+
+		h.tab("\t");
+		await h.flush();
+
+		// Cycle should fall back to currentModel (dfModel) as position 0,
+		// then advance to extModel1 at position 1.
+		expect(h.setModelTemporary.mock.calls.length).toBe(1);
+		expect(h.setModelTemporary.mock.calls[0][0]).toMatchObject({
+			provider: extModel1.provider,
+			id: extModel1.id,
 		});
-		const setAdvisorEnabled = vi.fn();
-		const isAdvisorEnabled = vi.fn(() => advisorEnabled);
+	});
 
-		const session = {
-			model: dfModel,
-			modelRegistry: { getAvailable: () => [dfModel, adModel] },
-			setModelTemporary,
-			isAdvisorEnabled,
-			setAdvisorEnabled,
-		} as unknown as InteractiveModeContext["session"];
+	it("shows status when all extra models are unresolvable", async () => {
+		const h = makeHarness(["nonexistent/provider/model"]);
 
-		const base = {
-			editor: editor as unknown as InteractiveModeContext["editor"],
-			ui: {
-				addInputListener,
-				addStartListener: vi.fn(),
-				getFocused: vi.fn(() => editor),
-			} as unknown as InteractiveModeContext["ui"],
-			session,
-			viewSession: session as unknown as InteractiveModeContext["viewSession"],
-			sessionManager: { getSessionId: () => "s1" } as unknown as InteractiveModeContext["sessionManager"],
-			settings: Settings.instance,
-			keybindings: { getKeys: () => [] } as unknown as InteractiveModeContext["keybindings"],
-			statusLine: { invalidate: vi.fn() },
-			updateEditorBorderColor: vi.fn(),
-			showStatus: vi.fn(),
-			showError: vi.fn(),
-			focusedAgentId: null,
-			loadingAnimation: undefined,
-			autoCompactionLoader: undefined,
-			retryLoader: undefined,
-			autoCompactionEscapeHandler: undefined,
-			retryEscapeHandler: undefined,
-			handleClearCommand: vi.fn(),
-			handleHotkeysCommand: vi.fn(),
-			handlePlanModeCommand: vi.fn(),
-			showTreeSelector: vi.fn(),
-			showUserMessageSelector: vi.fn(),
-			showSessionSelector: vi.fn(),
-			handleSTTToggle: vi.fn(),
-			showDebugSelector: vi.fn(),
-			toggleThinkingBlockVisibility: vi.fn(),
-			showHistorySearch: vi.fn(),
-			isBashMode: false,
-			isPythonMode: false,
-		} as unknown as InteractiveModeContext;
+		h.tab("\t");
+		await h.flush();
 
-		const controller = new InputController(base);
-		controller.setupKeyHandlers();
-		const calls = addInputListener.mock.calls.map((c: unknown[]) => c[0]) as Array<
-			(data: string) => object | undefined
-		>;
-		const tab = calls[4]!;
+		expect(h.setModelTemporary).not.toHaveBeenCalled();
+		expect(h.ctx.showStatus).toHaveBeenCalledWith("No resolvable extra models for Tab cycle");
+	});
 
-		// First attempt: model switch fails
-		tab("\t");
-		for (let i = 0; i < 4; i++) await Promise.resolve();
+	it("passes through to autocomplete when editor has text", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
+		const editor = h.ctx.editor as unknown as FakeEditor;
+		editor.setText("hello");
 
-		expect(setAdvisorEnabled).not.toHaveBeenCalled();
+		const result = h.tab("\t");
+		await h.flush();
 
-		// Change advisor state before retry — if snapshot leaked, restore would use stale value
-		advisorEnabled = false;
-		failSwitch = false;
+		// Tab returns undefined = not consumed when editor has text
+		expect(result).toBeUndefined();
+		expect(h.setModelTemporary).not.toHaveBeenCalled();
+	});
 
-		// Retry: model switch succeeds
-		tab("\t");
-		for (let i = 0; i < 4; i++) await Promise.resolve();
+	it("shows error when setModelTemporary throws", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
 
-		expect(setAdvisorEnabled).toHaveBeenCalledWith(false);
-		expect(setAdvisorEnabled.mock.calls.length).toBe(1);
+		// Replace setModelTemporary with a failing one
+		const failFn = vi.fn(async () => { throw new Error("auth required"); });
+		(h.ctx.session as unknown as { setModelTemporary: unknown }).setModelTemporary = failFn;
 
-		// Now simulate that we're on advisor model and toggle back
-		(session as unknown as Record<string, unknown>).model = adModel;
-		tab("\t");
-		for (let i = 0; i < 4; i++) await Promise.resolve();
+		h.tab("\t");
+		await h.flush();
 
-		// The snapshot was captured fresh (advisorEnabled=false), so return should NOT restore
-		expect(setAdvisorEnabled.mock.calls.length).toBe(1);
-		expect(setAdvisorEnabled).not.toHaveBeenCalledWith(true);
+		expect(failFn).toHaveBeenCalled();
+		expect(h.ctx.showError).toHaveBeenCalledWith("auth required");
+	});
+
+	it("respects ephemeral flag on setModelTemporary", async () => {
+		const h = makeHarness(["anthropic/claude-sonnet-4-6"]);
+
+		h.tab("\t");
+		await h.flush();
+
+		expect(h.setModelTemporary.mock.calls[0][2]).toEqual({ ephemeral: true });
 	});
 });
