@@ -733,6 +733,11 @@ export class SessionAdvisors {
 			// to delete workspace files it was never granted (issue #5680 review).
 			const advisorCanMutateFiles = advisorToolMap.has("write") || advisorToolMap.has("edit");
 			if (advisorCanMutateFiles) availableAdvisorToolNames.add("delete");
+			// Build tool list AFTER adding Cursor delete so the contract is complete.
+			const toolListStr = [...availableAdvisorToolNames].sort().join(", ");
+			const resolvedSystemPrompt = systemPrompt.map(s =>
+				s.replace("{ADVISOR_TOOL_LIST}", toolListStr),
+			);
 			const advisorCursorExecHandlers = new CursorExecHandlers({
 				cwd: this.#host.sessionManager.getCwd(),
 				getCwd: () => this.#host.sessionManager.getCwd(),
@@ -750,7 +755,7 @@ export class SessionAdvisors {
 				);
 			const advisorAgent = new Agent({
 				initialState: {
-					systemPrompt,
+					systemPrompt: resolvedSystemPrompt,
 					model: advisorModel,
 					thinkingLevel: toReasoningEffort(advisorThinkingLevel),
 					tools: advisorLoopTools,
@@ -1041,6 +1046,7 @@ export class SessionAdvisors {
 
 		// Normal routing (non-terminal review path) — unchanged.
 		const interrupting = isInterruptingSeverity(severity);
+		const terminalAnswerNoQueuedWork = this.#hasTerminalTextAnswerWithoutQueuedWork();
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
 			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
@@ -1050,10 +1056,18 @@ export class SessionAdvisors {
 			// loop consumes a steer at its next boundary.
 			streaming: this.#host.agent.state.isStreaming,
 			aborting: this.#host.abortInProgress(),
-			terminalAnswerNoQueuedWork: this.#hasTerminalTextAnswerWithoutQueuedWork(),
+			terminalAnswerNoQueuedWork,
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
-		logger.debug("advisor delivery: normal path channel", { severity, channel, streaming: this.#host.agent.state.isStreaming, advisor: advisor.name });
+		logger.debug("advisor delivery: normal path channel", {
+			severity,
+			channel,
+			streaming: this.#host.agent.state.isStreaming,
+			preserveOnly: this.#preserveAdvisorAdvice,
+			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+			terminalAnswerNoQueuedWork,
+			advisor: advisor.name,
+		});
 		if (channel === "aside") {
 			if (this.#host.agent.state.isStreaming) {
 				logger.debug("advisor delivery: normal aside → enqueue", { severity, advisor: advisor.name });

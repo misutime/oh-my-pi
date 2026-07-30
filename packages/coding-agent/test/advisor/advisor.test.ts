@@ -5053,7 +5053,7 @@ describe("advisor", () => {
 			}
 		});
 
-		it("preserves a late concern when the primary already ended with a terminal answer", () => {
+		it("steers a late concern after a terminal answer so the primary acts on the advice", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "concern",
@@ -5062,7 +5062,7 @@ describe("advisor", () => {
 					aborting: false,
 					terminalAnswerNoQueuedWork: true,
 				}),
-			).toBe("preserve");
+			).toBe("steer");
 		});
 
 		it("steers a late blocker after a terminal answer so the primary continues and acknowledges it (#5628)", () => {
@@ -5096,6 +5096,18 @@ describe("advisor", () => {
 					interruptImmuneTurnActive: true,
 				}),
 			).toBe("preserve");
+			// Immune window wins over terminal-answer concern: downgrade to aside
+			// rather than re-triggering the primary during cooldown.
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "concern",
+					autoResumeSuppressed: false,
+					streaming: false,
+					aborting: false,
+					terminalAnswerNoQueuedWork: true,
+					interruptImmuneTurnActive: true,
+				}),
+			).toBe("aside");
 		});
 		it("preserves an interrupting note while suppressed AND idle (no auto-resume of a stopped run)", () => {
 			for (const severity of ["concern", "blocker"] as const) {

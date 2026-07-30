@@ -108,11 +108,10 @@ export function isAdvisorInterruptImmuneTurnActive(opts: {
  *   the live turn while one is streaming, or (when idle) a triggered turn so the
  *   advice is acted on immediately.
  * - If the primary tail is already a terminal text answer and there is no queued
- *   work, a late `concern` is preserved as a visible card instead of waking the
- *   primary to restate completion. A `blocker` is the exception: it means the
- *   agent handed off broken or unexercised work, so it still steers a triggered
- *   turn to force the primary to acknowledge and continue before the turn is
- *   considered done (#5628) — deferring it to the next user turn is the bug.
+ *   work, a late `concern` or `blocker` still steers a triggered turn so the
+ *   primary acts on the advice immediately — the advisor spots real defects in
+ *   the just-produced output, not afterthoughts. The main model evaluates
+ *   whether the advice is valid; the emission guard dedup prevents repeat spam.
  * - After a deliberate user interrupt (`autoResumeSuppressed`) the advisor must
  *   not auto-resume the stopped run. While the agent is idle — or still tearing
  *   the interrupted turn down (`aborting`) — the note is preserved as a visible
@@ -136,9 +135,17 @@ export function resolveAdvisorDeliveryChannel(opts: {
 	if (opts.preserveOnly && !opts.streaming) return "preserve";
 	if (!isInterruptingSeverity(opts.severity)) return "aside";
 	if (opts.autoResumeSuppressed && (opts.aborting || !opts.streaming)) return "preserve";
-	if (opts.terminalAnswerNoQueuedWork && opts.severity !== "blocker" && !opts.streaming && !opts.aborting)
-		return "preserve";
+	// Post-interrupt immune window: suppress further interrupting notes as aside
+	// so the advisor doesn't immediately re-trigger a turn after a steer.
 	if (opts.interruptImmuneTurnActive) return "aside";
+	// Terminal answer with no queued work: concern/blocker still steer so the
+	// advisor's real-defect feedback is acted on immediately (#7372c0404 fix).
+	// The main model evaluates whether the advice is valid — advisor is a
+	// constant-reminder role; the emission guard dedup prevents repeat spam.
+	if (opts.terminalAnswerNoQueuedWork && !opts.streaming && !opts.aborting) {
+		if (opts.severity === "blocker" || opts.severity === "concern") return "steer";
+		return "preserve";
+	}
 	return "steer";
 }
 
