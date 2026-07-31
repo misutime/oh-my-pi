@@ -16,7 +16,7 @@ import { resolveMemoryBackend } from "../memory-backend/resolve";
 import { MEMORY_BACKEND_TOOL_NAMES } from "../memory-backend/tool-names";
 import type { MemoryBackendStartOptions } from "../memory-backend/types";
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
-import { usesCodexTaskPrompt } from "../task/prompt-policy";
+import { promptToolShape, usesCodexTaskPrompt } from "../task/prompt-policy";
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
 import { computerExposureMode } from "../tools/computer/exposure";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
@@ -392,7 +392,21 @@ export class SessionTools {
 		const activeModel = this.#host.model();
 		const model = activeModel ? formatModelString(activeModel) : undefined;
 		if (!model || this.#host.settings.get("includeModelInPrompt")) return model;
-		return usesCodexTaskPrompt(model) ? "task-policy:gpt-5.6" : "task-policy:default";
+		// task.eager=always renders the unified hard delegation branch for every model,
+		// so only the policy dimension below is unified — never the tool shape dimension.
+		const eagerAlways = this.#host.settings.get("task.eager") === "always";
+		const policy = usesCodexTaskPrompt(model, eagerAlways) ? "gpt-5.6" : "default";
+		// The rendered tool inventory is model-dependent under `tools.format=auto` even
+		// when the model id is hidden and the delegation policy is unified: a model
+		// without native tool support renders the full owned-dialect catalog instead
+		// of the compact name list (sdk.ts `resolveDialect` + `nativeTools`), so the
+		// cache key must keep that shape or a stale compact/full inventory survives
+		// the model switch. The example dialect follows the same resolution
+		// (buildSystemPromptInternal `toolDialect` → `renderToolInventory`), so
+		// `owned:<dialect>` stays byte-constant across models while `auto:<dialect>`
+		// tracks the fallback.
+		const shape = promptToolShape(this.#host.settings.get("tools.format"), activeModel);
+		return `task-policy:${policy};tool-shape:${shape}`;
 	}
 
 	#logComputerState(message: string, enabled: boolean): void {

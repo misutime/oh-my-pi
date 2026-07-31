@@ -817,6 +817,17 @@ export interface BuildSystemPromptOptions {
 	appendPrompt?: string;
 	inlineToolDescriptors?: boolean;
 	includeWorkspaceTree?: boolean;
+	/**
+	 * Tool-call format resolved into the inventory examples dialect. `auto`
+	 * resolves as native unless `model` lacks native tool support, in which case
+	 * it falls back to the model's preferred owned dialect. Default: "auto"
+	 */
+	toolFormat?: DialectFormat;
+	/**
+	 * Model used to resolve `toolFormat`. Optional: without it, `auto` resolves
+	 * as native (compact tool-name inventory). Default: undefined
+	 */
+	model?: (Pick<Model, "supportsTools"> & Partial<Pick<Model, "id">>) | undefined;
 }
 
 /**
@@ -828,10 +839,18 @@ export interface BuildSystemPromptOptions {
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	const toolNames = options.tools?.map(tool => tool.name);
 	const toolMap = options.tools ? new Map(options.tools.map(tool => [tool.name, tool])) : undefined;
+	// Resolve the tool format once and feed the actual dialect (or native) into
+	// the internal builder so the owned-dialect `# Tool:` catalog renders
+	// byte-identical examples across models — in lockstep with the prompt cache
+	// key's tool-shape dimension. Native tool calling keeps the compact name list.
+	const toolDialect = resolveDialect(options.toolFormat ?? "auto", options.model);
+	const nativeTools = toolDialect === undefined;
 	const promptTools = toolMap
 		? projectSystemPromptToolMetadata(
 				toolMap,
-				options.inlineToolDescriptors ? { mode: "full" } : { mode: "compact", toolNames: toolNames ?? [] },
+				nativeTools && !options.inlineToolDescriptors
+					? { mode: "compact", toolNames: toolNames ?? [] }
+					: { mode: "full" },
 			)
 		: undefined;
 	return await buildSystemPromptInternal({
@@ -844,6 +863,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		includeWorkspaceTree: options.includeWorkspaceTree,
 		toolNames,
 		tools: promptTools,
+		nativeTools,
+		toolDialect,
 	});
 }
 
@@ -2787,8 +2808,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			let appendPrompt: string | undefined = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
 			// Owned/in-band tool dialects (non-native) require the catalog as `# Tool:`
-			// sections; native tool calling lets the compact name list suffice.
-			const nativeTools = resolveDialect(settings.get("tools.format"), agent?.state.model ?? model) === undefined;
+			// sections; native tool calling lets the compact name list suffice. The
+			// resolved dialect also drives the inventory examples, so an explicit
+			// `tools.format` (or the auto fallback) renders byte-identical examples
+			// across models — matching the prompt cache key's tool-shape dimension.
+			const toolDialect = resolveDialect(settings.get("tools.format"), agent?.state.model ?? model);
+			const nativeTools = toolDialect === undefined;
 			const promptTools = projectSystemPromptToolMetadata(
 				tools,
 				nativeTools && !inlineToolDescriptors ? { mode: "compact", toolNames } : { mode: "full" },
@@ -2816,6 +2841,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				skillsSettings: settings.getGroup("skills"),
 				inlineToolDescriptors,
 				nativeTools,
+				toolDialect,
 				intentField,
 				eagerTasks,
 				eagerTasksAlways,

@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
-import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
+import { type Dialect, renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
@@ -496,6 +496,16 @@ export interface BuildSystemPromptOptions {
 	 * compact tool-name list; otherwise it renders full `# Tool:` sections. Default: true
 	 */
 	nativeTools?: boolean;
+	/**
+	 * Resolved in-band tool dialect (explicit `tools.format` or the `auto`
+	 * fallback for a model without native tool support). When set, the verbose
+	 * `# Tool:` inventory examples render in this dialect regardless of the
+	 * model id, and the compact native name list is never used — owned tools
+	 * are described in-band, not via provider-native tool calling. When unset,
+	 * examples follow the model's preferred dialect and `nativeTools` alone
+	 * decides list vs catalog. Default: undefined
+	 */
+	toolDialect?: Dialect;
 	/** Skills settings for discovery. */
 	skillsSettings?: SkillsSettings;
 	/** Working directory. Default: getProjectDir() */
@@ -568,6 +578,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		inlineToolDescriptors: providedInlineToolDescriptors,
 		resolvedAppendSystemPrompt: providedResolvedAppendPrompt,
 		nativeTools = true,
+		toolDialect,
 		skillsSettings,
 		toolNames: providedToolNames,
 		cwd,
@@ -777,8 +788,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	// List mode shows a compact tool-name list; it only applies when descriptors
 	// stay in provider-native tool schemas AND native tool calling is active.
-	// Otherwise render full `# Tool:` sections inline in the system prompt.
-	const toolListMode = !inlineToolDescriptors && nativeTools;
+	// An explicit in-band dialect forces the full catalog: owned tools are
+	// described in the prompt, never as a compact provider-native name list.
+	const toolListMode = !inlineToolDescriptors && nativeTools && toolDialect === undefined;
 	// Build tool descriptions for system prompt rendering.
 	const toolPromptNames = new Map<string, string>(toolNames.map(name => [name, tools?.get(name)?.wireName ?? name]));
 	// xd://-mounted tools count as present for prompt gates ({{#has tools "lsp"}})
@@ -811,6 +823,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 					};
 				}),
 				model ?? "",
+				toolDialect,
 			);
 
 	// Filter skills for the rendered system prompt:
@@ -855,7 +868,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		cwd: promptCwd,
 		additionalWorkspaceRoots: additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd)),
 		model: includeModelInPrompt ? (model ?? "") : "",
-		useCodexTaskPrompt: usesCodexTaskPrompt(model),
+		useCodexTaskPrompt: usesCodexTaskPrompt(model, eagerTasksAlways),
 		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",

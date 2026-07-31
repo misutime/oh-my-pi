@@ -78,4 +78,21 @@ describe("renderToolInventory", () => {
 		// The `#` comment inside the code fence is preserved verbatim.
 		expect(out).toContain("\n# not a header");
 	});
+
+	it("pins example syntax to an explicit dialect regardless of the model", () => {
+		const anthropicModel = "claude-3-5-sonnet-20241022";
+		const qwenModel = "qwen3-coder-plus";
+		// Without an explicit dialect the two models render different native syntax.
+		const anthropicDefault = renderToolInventory([searchTool], anthropicModel);
+		const qwenDefault = renderToolInventory([searchTool], qwenModel);
+		expect(anthropicDefault).not.toBe(qwenDefault);
+		expect(anthropicDefault).toContain('<invoke name="web_search">');
+
+		// An explicit owned dialect wins: byte-identical across both models.
+		const anthropicOwned = renderToolInventory([searchTool], anthropicModel, "qwen3");
+		const qwenOwned = renderToolInventory([searchTool], qwenModel, "qwen3");
+		expect(anthropicOwned).toBe(qwenOwned);
+		expect(anthropicOwned).toContain("<tool_call>");
+		expect(anthropicOwned).not.toContain('<invoke name="web_search">');
+	});
 });

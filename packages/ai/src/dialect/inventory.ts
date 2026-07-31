@@ -1,25 +1,34 @@
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { jsonSchemaToTypeScript, toolWireSchema } from "../utils/schema";
 import { renderToolExamples } from "./examples";
-import type { InbandTool } from "./types";
+import type { Dialect, InbandTool } from "./types";
 
 /**
  * Human-readable per-tool inventory: each tool renders as a `# Tool: <name>`
  * section with its description, a simplified TypeScript-style parameter
- * signature (derived from the wire JSON Schema), and examples in the model's
- * native dialect. Shared by the verbose system-prompt inventory and
- * `/dump` so both render the catalog the same way.
+ * signature (derived from the wire JSON Schema), and examples in the tool
+ * dialect. Shared by the verbose system-prompt inventory and `/dump` so both
+ * render the catalog the same way.
  *
- * `model` is a model id; the native example dialect is resolved from it
- * (`preferredDialect`, which falls back to XML for empty/unknown ids).
+ * `model` is a model id; `dialect` optionally pins the example dialect. When
+ * provided (an explicit `tools.format` or the resolved `auto` fallback), it
+ * wins over the model-derived preference so the catalog stays byte-identical
+ * across models — matching the prompt cache key's `owned:<dialect>` /
+ * `auto:<dialect>` shape labels. When omitted, the native example dialect is
+ * resolved from the model (`preferredDialect`, which falls back to XML for
+ * empty/unknown ids).
  */
-export function renderToolInventory(tools: readonly InbandTool[], model: string): string {
+export function renderToolInventory(
+	tools: readonly InbandTool[],
+	model: string,
+	dialect: Dialect | undefined = undefined,
+): string {
 	if (tools.length === 0) return "";
-	const dialect = preferredDialect(model);
+	const effectiveDialect = dialect ?? preferredDialect(model);
 	return tools
 		.map(tool => {
 			const params = jsonSchemaToTypeScript(toolWireSchema(tool));
-			const examples = renderToolExamples(tool, dialect);
+			const examples = renderToolExamples(tool, effectiveDialect);
 			const description = demoteDescriptionHeaders(tool.description ?? "");
 			const parts = [`# Tool: ${tool.name}`, description, "", `Parameters: ${params}`];
 			if (examples) parts.push("", examples);

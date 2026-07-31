@@ -58,6 +58,20 @@ const SDK_TOOL: Tool = {
 	},
 };
 
+// A tool with an example so the inventory renders dialect-specific syntax; used
+// by the owned-dialect tests to observe which dialect the examples follow.
+const TOOLS_WITH_EXAMPLES = new Map<string, SystemPromptToolMetadata>([
+	[
+		"web_search",
+		{
+			label: "Web Search",
+			description: "Searches the web.",
+			parameters: { type: "object", properties: { query: { type: "string" } } },
+			examples: [{ caption: "Basic", call: { query: "rust" } }],
+		},
+	],
+]);
+
 interface MetadataGetterCounts {
 	label: number;
 	wireName: number;
@@ -667,5 +681,103 @@ describe("system prompt tool inventory", () => {
 
 		expect(text).toContain("<skills>");
 		expect(text).toContain("- frontend-design: Frontend UI workflow");
+	});
+
+	it("renders identical owned-dialect examples across models with an explicit tool dialect", async () => {
+		const renderWith = async (model: string): Promise<string> => {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: tempDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: ["web_search"],
+				tools: TOOLS_WITH_EXAMPLES,
+				workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+				includeModelInPrompt: false,
+				toolDialect: "qwen3",
+				model,
+			});
+			return systemPrompt.join("\n\n");
+		};
+		// The explicit dialect forces the full catalog even with the default
+		// `nativeTools: true` (owned tools are described in-band, never as a
+		// compact provider-native name list).
+		const anthropicModel = await renderWith("claude-3-5-sonnet-20241022");
+		const qwenModel = await renderWith("qwen3-coder-plus");
+		expect(anthropicModel).toBe(qwenModel);
+		expect(anthropicModel).toContain("# Tool: web_search");
+		expect(anthropicModel).not.toContain("- Web Search: `web_search`");
+		// Examples render in the owned qwen3 dialect, not the model's native one.
+		expect(anthropicModel).toContain("<tool_call>");
+		expect(anthropicModel).not.toContain('<invoke name="web_search">');
+	});
+
+	it("keeps model-preferred example dialects when no tool dialect is given", async () => {
+		const renderWith = async (model: string): Promise<string> => {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: tempDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: ["web_search"],
+				tools: TOOLS_WITH_EXAMPLES,
+				workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+				nativeTools: false,
+				model,
+			});
+			return systemPrompt.join("\n\n");
+		};
+		const anthropicModel = await renderWith("claude-3-5-sonnet-20241022");
+		const qwenModel = await renderWith("qwen3-coder-plus");
+		// Without a pinned dialect each model keeps its preferred example syntax,
+		// so the prompt stays model-dependent (existing default behavior).
+		expect(anthropicModel).not.toBe(qwenModel);
+		expect(anthropicModel).toContain("# Tool: web_search");
+		expect(anthropicModel).toContain('<invoke name="web_search">');
+		expect(qwenModel).toContain("<tool_call>");
+	});
+
+	it("SDK wrapper resolves an explicit tool format into the owned-dialect catalog", async () => {
+		const { systemPrompt } = await buildSdkSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			tools: [SDK_TOOL],
+			toolFormat: "qwen3",
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).toContain("# Tool: sdk_custom");
+		expect(text).not.toContain("- SDK Custom: `sdk_custom`");
+	});
+
+	it("SDK wrapper falls back to the resolved dialect for auto format on a model without native tools", async () => {
+		const { systemPrompt } = await buildSdkSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			tools: [SDK_TOOL],
+			toolFormat: "auto",
+			model: { id: "qwen3-coder-plus", supportsTools: false },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).toContain("# Tool: sdk_custom");
+		expect(text).not.toContain("- SDK Custom: `sdk_custom`");
+	});
+
+	it("SDK wrapper keeps the compact native list for auto format on a native model", async () => {
+		const { systemPrompt } = await buildSdkSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			tools: [SDK_TOOL],
+			toolFormat: "auto",
+			model: { id: "claude-3-5-sonnet-20241022", supportsTools: true },
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).toContain("- SDK Custom: `sdk_custom`");
+		expect(text).not.toContain("# Tool: sdk_custom");
 	});
 });
