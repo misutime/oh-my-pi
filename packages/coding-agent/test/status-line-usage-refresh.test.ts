@@ -234,7 +234,7 @@ describe("StatusLineComponent usage refresh", () => {
 		late.resolve(usageReport(42));
 		await flushMicrotasks();
 
-		expect(plain(component.getTopBorder(80).content)).toContain("5h 42%");
+		expect(plain(component.getTopBorder(80).content)).toContain("5h 58%L");
 	});
 
 	it("re-fetches usage immediately when the session rotates to another org under the same email", async () => {

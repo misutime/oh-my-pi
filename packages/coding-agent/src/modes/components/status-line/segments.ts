@@ -612,9 +612,10 @@ const collabSegment: StatusLineSegment = {
 	},
 };
 
-function pickUsageColor(percent: number): "muted" | "warning" | "error" {
-	if (percent >= 80) return "error";
-	if (percent >= 50) return "warning";
+/** Color for a remaining-percentage quota: the less remaining, the more urgent. */
+function pickRemainingColor(remaining: number): "muted" | "warning" | "error" {
+	if (remaining <= 20) return "error";
+	if (remaining <= 50) return "warning";
 	return "muted";
 }
 
@@ -646,8 +647,10 @@ const usageSegment: StatusLineSegment = {
 			if (tier) parts.push(theme.fg("accent", tier));
 		}
 		if (u.fiveHour) {
-			const pct = u.fiveHour.percent;
-			const pctText = theme.fg(pickUsageColor(pct), `${Math.round(pct)}%`);
+			// `percent` is the used fraction; render the remaining fraction with an
+			// `L` (left) suffix so it is never mistaken for used quota.
+			const remaining = 100 - u.fiveHour.percent;
+			const pctText = theme.fg(pickRemainingColor(remaining), `${Math.round(remaining)}%L`);
 			const reset =
 				u.fiveHour.resetMinutes !== undefined
 					? theme.fg("muted", ` (${formatUsageReset(u.fiveHour.resetMinutes, "m")})`)
@@ -655,8 +658,8 @@ const usageSegment: StatusLineSegment = {
 			parts.push(`5h ${pctText}${reset}`);
 		}
 		if (u.sevenDay) {
-			const pct = u.sevenDay.percent;
-			const pctText = theme.fg(pickUsageColor(pct), `${Math.round(pct)}%`);
+			const remaining = 100 - u.sevenDay.percent;
+			const pctText = theme.fg(pickRemainingColor(remaining), `${Math.round(remaining)}%L`);
 			const reset =
 				u.sevenDay.resetHours !== undefined
 					? theme.fg("muted", ` (${formatUsageReset(u.sevenDay.resetHours, "h")})`)
