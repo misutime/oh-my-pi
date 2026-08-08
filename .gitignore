@@ -90,3 +90,7 @@ packages/coding-agent/bench/boot-baseline.json
 /bazel-pi
 /bazel-oh-my-pi
 /.bazelrc.user
+
+# Windows null device + local code intelligence index (fork)
+nul
+.codegraph/
