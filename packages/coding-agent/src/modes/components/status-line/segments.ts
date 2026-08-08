@@ -5,6 +5,7 @@ import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, getProjectDir, pathIsWithin, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { type ThemeColor, theme } from "../../../modes/theme/theme";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../../../tools/render-utils";
+import { fileHyperlink } from "../../../tui/hyperlink";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
 import { formatContextUsage, getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
@@ -116,9 +117,10 @@ const modelSegment: StatusLineSegment = {
 					: `${theme.thinking.autoPending} auto`;
 			} else {
 				const level = state.thinkingLevel ?? ThinkingLevel.Off;
-				if (level !== ThinkingLevel.Off) {
-					thinkingDisplay = theme.thinking[level as keyof typeof theme.thinking] ?? "";
-				}
+				thinkingDisplay =
+					level === ThinkingLevel.Off
+						? `${theme.status.disabled} off`
+						: (theme.thinking[level as keyof typeof theme.thinking] ?? level);
 			}
 		}
 
@@ -280,7 +282,8 @@ const pathSegment: StatusLineSegment = {
 		if (stripPrefix && ctx.worktree) {
 			const { projectName, worktreeName } = ctx.worktree;
 			const label = ctx.git.branch === worktreeName ? projectName : `${projectName}/${worktreeName}`;
-			const content = withIcon(theme.icon.worktree, clampPathLength(label, opts.maxLength ?? 40));
+			const text = fileHyperlink(getProjectDir(), clampPathLength(label, opts.maxLength ?? 40));
+			const content = withIcon(theme.icon.worktree, text);
 			return { content: theme.fg("statusLinePath", content), visible: true };
 		}
 
@@ -301,13 +304,10 @@ const pathSegment: StatusLineSegment = {
 		}
 
 		pwd = clampPathLength(pwd, opts.maxLength ?? 40);
-		if (repoSuffix) {
-			pwd = `${pwd}${repoSuffix}`;
-		}
 
 		const showScratchIcon = scratch && stripPrefix;
 		const icon = showScratchIcon ? theme.icon.scratchFolder : theme.icon.folder;
-		const content = withIcon(icon, pwd);
+		const content = withIcon(icon, `${fileHyperlink(projectDir, pwd)}${repoSuffix}`);
 		return { content: theme.fg("statusLinePath", content), visible: true };
 	},
 };
@@ -592,10 +592,12 @@ const sessionNameSegment: StatusLineSegment = {
 		const name = sessionManager?.getSessionName();
 		if (!name) return { content: "", visible: false };
 
-		const ansi =
-			getSessionAccentAnsi(
-				getSessionAccentHex(name, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance),
-			) ?? theme.getFgAnsi("accent");
+		const accentEnabled = ctx.sessionAccent !== false;
+		const ansi = accentEnabled
+			? (getSessionAccentAnsi(
+					getSessionAccentHex(name, theme.getMajorThemeColorHexes(), theme.accentSurfaceLuminance),
+				) ?? theme.getFgAnsi("accent"))
+			: theme.getFgAnsi("accent");
 		return { content: `${ansi}${sanitizeStatusText(name)}\x1b[39m`, visible: true };
 	},
 };

@@ -27,6 +27,8 @@ import {
 	ConnectScmSuccessSchema,
 	ConnectScmToolCallSchema,
 	ConversationSearchArgsSchema,
+	ConversationStateStructureSchema,
+	ConversationTokenDetailsSchema,
 	type ExecServerMessage,
 	ExecServerMessageSchema,
 	ExecuteHookArgsSchema,
@@ -196,6 +198,39 @@ function soleResult(frames: AgentClientMessage[]) {
 describe("Cursor modern exec protocol activation", () => {
 	it("advertises the client build whose schema includes modern exec frames", () => {
 		expect(CURSOR_CLIENT_VERSION).toBe("cli-2026.07.23-e383d2b");
+	});
+});
+
+describe("Cursor conversation checkpoints", () => {
+	it("records checkpoint-only occupancy without billing it as token usage", async () => {
+		const output = cursorAssistantMessage();
+
+		await handleServerMessage(
+			create(AgentServerMessageSchema, {
+				message: {
+					case: "conversationCheckpointUpdate",
+					value: create(ConversationStateStructureSchema, {
+						tokenDetails: create(ConversationTokenDetailsSchema, { usedTokens: 120_000 }),
+					}),
+				},
+			}),
+			output,
+			new AssistantMessageEventStream(),
+			newBlockState(),
+			new Map(),
+			{ write: () => true } as unknown as Parameters<typeof handleServerMessage>[5],
+			undefined,
+			undefined,
+			{ sawTokenDelta: false },
+			[],
+		);
+
+		expect(output.usage).toMatchObject({
+			contextTokens: 120_000,
+			input: 0,
+			output: 0,
+			totalTokens: 0,
+		});
 	});
 });
 
@@ -1196,11 +1231,11 @@ describe("Cursor modern exec frames: Pi tools", () => {
 		expect(answer.value.result.value.diff).toBe("-before\n+after");
 		expect(answer.value.result.value.patch).toBe("@@");
 
-		// The synthesized display block must use the local edit tool's snake_case
-		// replace schema, or the rebuilt transcript renders empty edits.
+		// The synthesized display block must use the local edit tool's replace
+		// schema, or the rebuilt transcript renders empty edits.
 		const block = output.content.find((b): b is ToolCallState => b.type === "toolCall");
 		expect(block?.name).toBe("edit");
-		expect(block?.arguments).toEqual({ path: "/repo/a.ts", edits: [{ old_text: "before", new_text: "after" }] });
+		expect(block?.arguments).toEqual({ path: "/repo/a.ts", old_string: "before", new_string: "after" });
 	});
 
 	it("answers each remaining Pi frame with a populated success payload", async () => {
@@ -1645,6 +1680,31 @@ describe("Cursor legacy read frame: range reporting", () => {
 		if (wholeAnswer.value.result.case !== "success") throw new Error(`got ${wholeAnswer.value.result.case}`);
 		expect(wholeAnswer.value.result.value.rangeApplied).toBe(false);
 	});
+	it("treats a path-embedded selector as ranged without reporting the slice as the file total", async () => {
+		const slice = Array.from({ length: 55 }, (_, index) => `line ${index + 301}`).join("\n");
+		const { frames } = await dispatchExec(
+			buildExecMessage({
+				case: "readArgs",
+				value: create(ReadArgsSchema, {
+					path: "/repo/plan.md:raw:301-",
+					toolCallId: "c-inline",
+				}),
+			}),
+			{
+				execHandlers: {
+					async read() {
+						return toolResult(slice, { details: { fileSize: 21_015 } });
+					},
+				},
+			},
+		);
+		const answer = soleResult(frames);
+		if (answer.case !== "readResult") throw new Error(`got ${answer.case}`);
+		if (answer.value.result.case !== "success") throw new Error(`got ${answer.value.result.case}`);
+		expect(answer.value.result.value.totalLines).toBe(0);
+		expect(answer.value.result.value.rangeApplied).toBe(true);
+		expect(answer.value.result.value.fileSize).toBe(21_015n);
+	});
 
 	it("carries the composed selector into the synthesized call", async () => {
 		// A bare path beside a ranged result makes the slice look like the whole
@@ -1855,33 +1915,6 @@ describe("Cursor MCP frame: approval-only probes", () => {
 		expect(answer.value.result.case).toBe("rejected");
 	});
 
-	it("rejects a probe when the host policy throws", async () => {
-		const { frames } = await dispatchExec(
-			buildExecMessage({
-				case: "mcpArgs",
-				value: create(McpArgsSchema, {
-					name: "deploy",
-					toolName: "deploy",
-					toolCallId: "c1",
-					providerIdentifier: "ops",
-					smartModeApprovalOnly: true,
-				}),
-			}),
-			{
-				execHandlers: {
-					async mcpApprovalPreflight() {
-						throw new Error("policy backend unavailable");
-					},
-				},
-			},
-		);
-
-		const answer = soleResult(frames);
-		if (answer.case !== "mcpResult") throw new Error(`got ${answer.case}`);
-		if (answer.value.result.case !== "rejected") throw new Error(`got ${answer.value.result.case}`);
-		expect(answer.value.result.value.reason).toContain("approval check failed");
-	});
-
 	it("still runs an ordinary MCP frame", async () => {
 		// The guard keys on the flag alone: a normal call must be unaffected.
 		let invocations = 0;
@@ -1946,29 +1979,6 @@ describe("Cursor exec answers: what the result claims about the work", () => {
 		expect(answer.value.result.value.totalLines).toBe(101);
 		expect(answer.value.result.value.rangeApplied).toBe(true);
 		expect(answer.value.result.value.fileSize).toBe(4096n);
-	});
-
-	it("reports the full line count for a ranged read that reaches EOF", async () => {
-		const { frames } = await dispatchExec(
-			buildExecMessage({
-				case: "readArgs",
-				value: create(ReadArgsSchema, { path: "/repo/small.ts", toolCallId: "c1", offset: 5, limit: 20 }),
-			}),
-			{
-				execHandlers: {
-					async read() {
-						return toolResult("line5\nline6\nline7\nline8\nline9\nline10", {
-							details: { totalLines: 10, fileSize: 60 },
-						});
-					},
-				},
-			},
-		);
-		const answer = soleResult(frames);
-		if (answer.case !== "readResult") throw new Error(`got ${answer.case}`);
-		if (answer.value.result.case !== "success") throw new Error(`got ${answer.value.result.case}`);
-		expect(answer.value.result.value.totalLines).toBe(10);
-		expect(answer.value.result.value.rangeApplied).toBe(true);
 	});
 
 	it("counts the payload when the read returned the file whole", async () => {

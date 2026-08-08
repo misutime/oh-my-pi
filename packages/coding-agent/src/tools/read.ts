@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
+import { type } from "@oh-my-pi/omptype";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -25,8 +26,7 @@ import {
 	readImageMetadata,
 	untilAborted,
 } from "@oh-my-pi/pi-utils";
-import { type } from "arktype";
-import { LRUCache } from "lru-cache/raw";
+import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import {
 	canonicalSnapshotKey,
 	getFileSnapshotStore,
@@ -721,6 +721,10 @@ const readSchema = type({
 	),
 });
 
+const readSchemaWithoutMemory = type({
+	path: type("string").describe("Local path, internal URI (e.g. skill://), or URL. Inline selectors are supported."),
+});
+
 export type ReadToolInput = typeof readSchema.infer;
 
 export interface ReadToolDetails {
@@ -735,10 +739,10 @@ export interface ReadToolDetails {
 	method?: string;
 	notes?: string[];
 	meta?: OutputMeta;
-	/** Full source line count when the read reached EOF. */
-	totalLines?: number;
 	/** Full on-disk byte size recorded before applying a file range. */
 	fileSize?: number;
+	/** Full source line count when the read reached EOF and the count is exact. */
+	totalLines?: number;
 	/** Raw text + start line for user-visible TUI rendering, set when content is text-like.
 	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
@@ -866,7 +870,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly label = "Read";
 	readonly loadMode = "essential";
 	description: string;
-	readonly parameters = readSchema;
+	get parameters(): typeof readSchema {
+		return this.session.settings.get("memory.backend") === "off" ? readSchemaWithoutMemory : readSchema;
+	}
 	readonly strict = true;
 
 	readonly #autoResizeImages: boolean;
@@ -962,8 +968,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	async #tryReadDelimitedPaths(
 		readPath: string,
 		signal?: AbortSignal,
+		routedUrlPredicate?: (entry: string) => boolean,
 	): Promise<AgentToolResult<ReadToolDetails> | null> {
-		const parts = await splitDelimitedPathEntry(readPath, this.session.cwd);
+		const parts = await splitDelimitedPathEntry(readPath, this.session.cwd, { routedUrlPredicate });
 		if (!parts) return null;
 
 		const notice = `Note: interpreted as ${parts.length} paths: ${parts.join(", ")}`;
@@ -1399,6 +1406,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const details = options.details ?? {};
 		const allLines = text.split("\n");
 		const totalLines = allLines.length;
+		details.totalLines = totalLines;
 		// User-requested 0-indexed range start. Lines BEFORE this are leading
 		// context (added below if offset is explicit).
 		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
@@ -1594,6 +1602,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const details = options.details ?? {};
 		const allLines = text.split("\n");
 		const totalLines = allLines.length;
+		details.totalLines = totalLines;
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 		const hashContext =
@@ -2304,9 +2313,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 
 		// Handle native OMP URLs and custom-scheme resources advertised by MCP servers.
-		// Use the internal-URL-aware splitter so malformed selectors are peeled
-		// off the URL and surfaced via parseSel rather than confusing handlers.
 		const internalRouter = InternalUrlRouter.instance();
+		const delimitedInternalResult = internalRouter.canResolve(readPath)
+			? await this.#tryReadDelimitedPaths(readPath, signal, entry => internalRouter.canResolve(entry))
+			: null;
+		if (delimitedInternalResult) return delimitedInternalResult;
+
+		// Peel malformed selectors through the internal-URL-aware parser before routing.
 		let promotedSelector: string | undefined;
 		if (internalRouter.canResolve(readPath)) {
 			const internalTarget = splitInternalUrlSel(readPath);
@@ -2484,6 +2497,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const imageMetadata = await readImageMetadata(absolutePath);
 		const mimeType = imageMetadata?.mimeType;
 		const ext = path.extname(absolutePath).toLowerCase();
+		const resolvedDisplayPath = formatPathRelativeToCwd(absolutePath, this.session.cwd);
 		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext);
 
 		// Profiler reports (macOS `sample` call trees, V8 `.cpuprofile` JSON):
@@ -2528,7 +2542,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				fileSize,
 			}));
 		} else if (isNotebookPath(absolutePath) && !isRawSelector(parsed)) {
-			const notebookText = await readEditableNotebookText(absolutePath, localReadPath);
+			const notebookText = await readEditableNotebookText(absolutePath, resolvedDisplayPath);
 			if (isMultiRange(parsed) && parsed.kind === "lines") {
 				return this.#buildInMemoryMultiRangeResult(notebookText, parsed.ranges, {
 					details: { resolvedPath: absolutePath },
@@ -2547,7 +2561,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const result = await convertFileWithMarkit(absolutePath, signal);
 			if (result.ok) {
 				const renderedContent =
-					ext === ".pdf" ? rewritePdfImagePlaceholders(result.content, localReadPath) : result.content;
+					ext === ".pdf" ? rewritePdfImagePlaceholders(result.content, resolvedDisplayPath) : result.content;
 				// Route the converted markdown through the in-memory text builder
 				// so line-range selectors (`file.pdf:50-100`, `:5-16,40-80`) and
 				// raw mode apply against the converted output. Without this,
@@ -2590,7 +2604,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
 					.text(
 						prependSuffixResolutionNotice(
-							`[Cannot read binary file '${formatPathRelativeToCwd(absolutePath, this.session.cwd)}' (${formatBytes(fileSize)}); not valid UTF-8 text. Use ':raw' to read bytes verbatim.]`,
+							`[Cannot read binary file '${resolvedDisplayPath}' (${formatBytes(fileSize)}); not valid UTF-8 text. Use ':raw' to read bytes verbatim.]`,
 							suffixResolution,
 						),
 					)
@@ -2607,7 +2621,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				if (summary?.parsed && summary.elided) {
 					const renderedSummary = this.#renderSummary(summary);
 					const footer = formatSummaryElisionFooter(
-						localReadPath,
+						resolvedDisplayPath,
 						renderedSummary.elidedRanges,
 						renderedSummary.elidedLines,
 					);
@@ -2728,11 +2742,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							totalFileLines === 0
 								? "The file is empty."
 								: `Use :1 to read from the start, or :${totalFileLines} to read the last line.`;
-						return toolResult<ReadToolDetails>({
-							resolvedPath: absolutePath,
-							suffixResolution,
-							totalLines: reachedEof ? totalFileLines : undefined,
-						})
+						return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
 							.text(
 								`Line ${requestedStart + 1} is beyond end of file (${totalFileLines} lines total). ${suggestion}`,
 							)
@@ -2914,6 +2924,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						details = {};
 						sourcePath = absolutePath;
 					}
+					if (reachedEof) details.totalLines = totalFileLines;
 
 					if (hashContext?.tag) {
 						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText);
@@ -2962,7 +2973,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						}
 					}
 
-					if (reachedEof) details.totalLines = totalFileLines;
 					content = [{ type: "text", text: outputText }];
 				}
 			}
@@ -3246,6 +3256,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (!rawSelector && artifact.size > MAX_ARTIFACT_RAW_INLINE_BYTES) {
 			outputText += `\n\n[${this.#formatArtifactWorkflowNotice(artifact, artifactUrl)}]`;
 		}
+		if (reachedEof) details.totalLines = totalFileLines;
 		if (displayContent) details.displayContent = displayContent;
 		if (truncationInfo) details.truncation = truncationInfo.result;
 		const resultBuilder = toolResult<ReadToolDetails>(details)

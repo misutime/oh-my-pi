@@ -1,6 +1,6 @@
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { jsonSchemaToTypeScript, toolWireSchema } from "../utils/schema";
-import { renderToolExamples } from "./examples";
+import { renderToolExamplesForDialect } from "./examples";
 import type { Dialect, InbandTool } from "./types";
 
 /**
@@ -28,7 +28,7 @@ export function renderToolInventory(
 	return tools
 		.map(tool => {
 			const params = jsonSchemaToTypeScript(toolWireSchema(tool));
-			const examples = renderToolExamples(tool, effectiveDialect);
+			const examples = renderToolExamplesForDialect(tool, effectiveDialect);
 			const description = demoteDescriptionHeaders(tool.description ?? "");
 			const parts = [`# Tool: ${tool.name}`, description, "", `Parameters: ${params}`];
 			if (examples) parts.push("", examples);

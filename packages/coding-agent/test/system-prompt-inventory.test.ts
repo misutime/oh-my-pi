@@ -457,7 +457,7 @@ describe("system prompt tool inventory", () => {
 		expect(text).toContain("The `computer` tool is explicitly enabled and available");
 		expect(text).toContain("MUST use `computer` for requests to view or control host desktop applications");
 		expect(text).toContain("NEVER claim Computer Use is unavailable");
-		expect(text).toContain("Inspect the fresh screenshot returned by every successful `computer` call");
+		expect(text).toContain("Ground every action in fresh evidence");
 	});
 
 	it("renders `# Tool:` sections (not a name list) when tools are not native", async () => {
@@ -779,5 +779,34 @@ describe("system prompt tool inventory", () => {
 
 		expect(text).toContain("- SDK Custom: `sdk_custom`");
 		expect(text).not.toContain("# Tool: sdk_custom");
+	});
+
+	it("omits the read-only scout delegation gate when scout is unavailable", async () => {
+		const opts = { toolNames: ["read", "bash", "task"], tools: TOOLS };
+		const withScout = (
+			await buildSystemPrompt({
+				...opts,
+				cwd: tempDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+				scoutAvailable: true,
+			})
+		).systemPrompt.join("\n\n");
+		const withoutScout = (
+			await buildSystemPrompt({
+				...opts,
+				cwd: tempDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+				scoutAvailable: false,
+			})
+		).systemPrompt.join("\n\n");
+
+		expect(withScout).toContain("read-only scout");
+		expect(withoutScout).not.toContain("read-only scout");
 	});
 });

@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [17.2.11] - 2026-08-07
+
+### Changed
+
+- Pasting an empty named register (`PUT … @name` with no matching capture) now surfaces a warning listing available registers and removes the span target instead of throwing an error.
+
+### Fixed
+
+- Fixed an issue where pipe-numbered `read`/`search` rows copied into top-level and bare-body patch payloads were not properly recovered (#7905).
+
+## [17.2.10] - 2026-08-06
+
+### Changed
+
+- Updated internal caching dependency to use `@oh-my-pi/pi-utils/lru`.
+
+## [17.2.2] - 2026-07-31
+
+### Breaking Changes
+
+- Replaced legacy SWAP, INS, and PASTE syntax with unified PUT and CUT hunks
+
+### Added
+
+- Added named register support (@reg) and span paste capabilities to clipboard operations
+- Added conservative recovery for uniformly omitted replacement indents near brace openers, preserving intentional indentation-only edits
+
+### Changed
+
+- Made .= the canonical inclusive range separator while retaining legacy separator variants as lenient input
+- Unified replacement, insertion, register paste, block, head/tail, move, and removal headers under a composable PUT, CUT, MV, and REM grammar
+
+### Fixed
+
+- Improved resilience against common model output formatting errors, including numbered read rows, summarized ranges, diff-style old/new rows, empty PUT deletes, harmless CUT colons, and single-line span shorthand
+
 ## [17.2.0] - 2026-07-30
 
 ### Breaking Changes

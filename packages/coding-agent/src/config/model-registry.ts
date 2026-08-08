@@ -27,6 +27,7 @@ import {
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
 	resolveModelCacheProviderId,
+	resolveOllamaModelCacheProviderId,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import {
 	collapseBuiltModelVariants,
@@ -64,15 +65,16 @@ const BUILT_IN_DISCOVERY_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const BUILT_IN_DISCOVERY_NON_AUTHORITATIVE_RETRY_MS = 5 * 60 * 1000;
 
 import type { ApiKeyResolver, FetchImpl } from "@oh-my-pi/pi-ai";
-import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { registerOAuthProvider, unregisterOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { setCodexAttestationProvider } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import {
 	getBundledModelReferenceIndex,
 	inheritReferenceThinking,
 	resolveModelReference,
 } from "@oh-my-pi/pi-catalog/identity";
-import { isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import { $envExact, isBunTestRuntime, isRecord, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { parseModelString, resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
@@ -328,7 +330,7 @@ interface CommandApiKeyResolution {
  */
 function resolveConfigValue(valueConfig: string): string | undefined {
 	if (valueConfig.startsWith("!")) return resolveCommandConfig(valueConfig.slice(1).trim());
-	const envValue = Bun.env[valueConfig];
+	const envValue = $envExact(valueConfig);
 	if (envValue) return envValue;
 	return valueConfig;
 }
@@ -579,7 +581,13 @@ function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: ModelTr
 		result.headers = patch.headers;
 		compat = patch.compat;
 	}
-	return buildModel({ ...result, compat } as ModelSpec<Api>);
+	const built = buildModel({ ...result, compat } as ModelSpec<Api>);
+	if (patch.thinking !== undefined && built.thinking !== undefined) {
+		// Config-authored capability metadata owns the explicit surface; build
+		// first so non-reasoning and wire-disabled models still suppress it.
+		built.thinking = patch.thinking;
+	}
+	return built;
 }
 
 function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {
@@ -965,14 +973,18 @@ export class ModelRegistry {
 	 * Refresh dynamic metadata that can appear only after a local model loads.
 	 */
 	async refreshSelectedModelMetadata(model: Model<Api>): Promise<Model<Api>> {
-		const isLlamaCppDiscovery = this.#discoverableProviders.some(
+		const llamaCppDiscoveryConfig = this.#discoverableProviders.find(
 			providerConfig => providerConfig.provider === model.provider && providerConfig.discovery.type === "llama.cpp",
 		);
-		if (!isLlamaCppDiscovery) {
+		if (!llamaCppDiscoveryConfig) {
 			return model;
 		}
 		this.#ensureFullSnapshot();
-		const runtimeMetadata = await discoverLlamaCppModelRuntimeMetadata(model, this.#nonResolvingDiscoveryContext());
+		const runtimeMetadata = await discoverLlamaCppModelRuntimeMetadata(
+			model,
+			this.#nonResolvingDiscoveryContext(),
+			llamaCppDiscoveryConfig.discovery.timeoutMs,
+		);
 		if (runtimeMetadata === undefined) {
 			return this.find(model.provider, model.id) ?? model;
 		}
@@ -1699,8 +1711,14 @@ export class ModelRegistry {
 	}
 
 	#configuredDiscoveryCacheProviderId(providerConfig: DiscoveryProviderConfig): string {
+		if (providerConfig.discovery.type === "ollama") {
+			return resolveOllamaModelCacheProviderId(providerConfig.provider, providerConfig.baseUrl);
+		}
 		if (providerConfig.discovery.type === "openai-models-list") {
-			return `${providerConfig.provider}:openai-models-list-context-v2`;
+			// context-v3 invalidates rows cached before server-advertised input
+			// modalities were parsed from `/v1/models`; warm v2 rows pinned
+			// vision-capable ids at `input: ["text"]` until a forced refresh.
+			return `${providerConfig.provider}:openai-models-list-context-v3`;
 		}
 		if (providerConfig.discovery.type === "litellm") {
 			// rich-v2 invalidates rows cached before reseller usage-suffix stripping
@@ -1997,14 +2015,15 @@ export class ModelRegistry {
 					this.#providerOverrides.has(descriptor.providerId) ||
 					this.#keylessProviders.has(descriptor.providerId));
 			if (isAuthenticated(apiKey) || descriptor.allowUnauthenticated || hasExplicitVllmConfig) {
-				const discoveryBaseUrl = this.#descriptorBaseUrl(descriptor.providerId);
-				options.push(
-					descriptor.createModelManagerOptions({
-						apiKey: isDiscoveryBearerApiKey(apiKey) ? apiKey : undefined,
-						baseUrl: discoveryBaseUrl,
-						fetch: this.#fetch,
-					}),
-				);
+				const discoveryConfig = {
+					apiKey: isDiscoveryBearerApiKey(apiKey) ? apiKey : undefined,
+					baseUrl: this.#descriptorBaseUrl(descriptor.providerId),
+					fetch: this.#fetch,
+				};
+				const preparedConfig =
+					getProviderDefinition(descriptor.providerId)?.prepareModelDiscovery?.(discoveryConfig) ??
+					discoveryConfig;
+				options.push(descriptor.createModelManagerOptions(preparedConfig));
 			}
 		}
 
@@ -2491,6 +2510,26 @@ export class ModelRegistry {
 			this.#runtimeProviderSourceByName.delete(providerName);
 			this.#clearRuntimeProviderState(providerName);
 		}
+		this.#lastStaticLoadMtime = null;
+		this.#reloadStaticModels();
+	}
+
+	/**
+	 * Remove one extension-registered provider and restore its static models.
+	 */
+	unregisterProvider(providerName: string): void {
+		const sourceId = this.#runtimeProviderSourceByName.get(providerName);
+		if (sourceId) {
+			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
+			sourceProviders?.delete(providerName);
+			if (sourceProviders?.size === 0) {
+				this.#runtimeProvidersBySource.delete(sourceId);
+			}
+			this.#runtimeProviderSourceByName.delete(providerName);
+		}
+		unregisterOAuthProvider(providerName);
+		this.#ensureFullSnapshot();
+		this.#clearRuntimeProviderState(providerName);
 		this.#lastStaticLoadMtime = null;
 		this.#reloadStaticModels();
 	}

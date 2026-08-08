@@ -37,6 +37,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	$env,
@@ -51,7 +52,7 @@ import {
 	prompt,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
-import chalk from "chalk";
+import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "../capability";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
@@ -438,6 +439,8 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 	return ["", theme.bold(theme.fg("accent", "Subagents")), ...rows.map(line => ` ${line}`)];
 }
 
+const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
+
 export class InteractiveMode implements InteractiveModeContext {
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -466,6 +469,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	initialChatRendered = false;
 	isBashMode = false;
 	toolOutputExpanded = false;
+	hideToolActivity = false;
 	todoExpanded = false;
 	planModeEnabled = false;
 	planModePaused = false;
@@ -480,6 +484,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
+	#nextAppearanceRequestToken = 1;
+	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
@@ -782,6 +788,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// hot path where the render never gets to paint the result.
 		this.editor.setTopBorderProvider(availableWidth => this.statusLine.getTopBorder(availableWidth));
 
+		this.hideToolActivity = settings.get("display.hideToolActivity");
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
 		this.proseOnlyThinking = settings.get("proseOnlyThinking");
 
@@ -1153,8 +1160,38 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Subscribe to terminal dark/light appearance changes.
 		// The terminal queries background color via OSC 11 at startup and on
 		// Mode 2031 notifications, computing luminance to detect dark/light.
-		this.ui.terminal.onAppearanceChange(mode => {
-			onTerminalAppearanceChange(mode);
+		const unsubscribeAppearanceReport = this.ui.terminal.onAppearanceReport?.((_mode, requestToken) => {
+			const request = this.#appearanceRefreshRequest;
+			if (request === undefined || requestToken !== request.token) return;
+			// ProcessTerminal dispatches report callbacks first, then synchronously
+			// dispatches onAppearanceChange when the reported appearance changed.
+			// That change callback consumes the request below before this microtask
+			// runs; an unchanged matching report has no change callback, so it
+			// consumes the one-shot here. Comparing the captured request prevents a
+			// newer Ctrl+L request from being cleared by this report's microtask.
+			queueMicrotask(() => {
+				if (this.#appearanceRefreshRequest === request) {
+					this.#appearanceRefreshRequest = undefined;
+				}
+			});
+		});
+		if (unsubscribeAppearanceReport) {
+			this.#eventBusUnsubscribers.push(unsubscribeAppearanceReport);
+		}
+		this.ui.terminal.onAppearanceChange((mode, requestToken) => {
+			const request = this.#appearanceRefreshRequest;
+			const appearanceRefreshWasRequested =
+				request !== undefined &&
+				Date.now() <= request.deadline &&
+				(requestToken === request.token || requestToken === undefined);
+			if (request !== undefined && requestToken === request.token) {
+				this.#appearanceRefreshRequest = undefined;
+			}
+			// Ctrl+L already replays immediately below. If either its asynchronous
+			// OSC 11 response or an automatic query ahead of it reveals a theme
+			// change, commit that change so theme loading performs a second full
+			// replay with the newly detected palette.
+			onTerminalAppearanceChange(mode, appearanceRefreshWasRequested ? {} : undefined);
 		});
 
 		// A branch change (checkout, worktree switch, `git switch`) invalidates
@@ -3946,6 +3983,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		this.#appearanceRefreshRequest = undefined;
 		if (this.loadingAnimation) {
 			this.#stopLoadingAnimation(false);
 		}
@@ -4117,7 +4155,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	/** Defer transcript command panels until the active turn can no longer grow above them. */
+	/**
+	 * Defer transcript command panels while the agent is streaming, then mount
+	 * them at the next settle, terminal or not. A non-terminal settle is only a
+	 * scheduling pause, so resumed streaming can still land below a panel
+	 * flushed there. That is preferred over leaving it queued behind a command
+	 * the user runs during the pause, which mounts immediately and would put the
+	 * older panel out of order.
+	 */
 	presentCommandOutput(content: Component | readonly Component[]): void {
 		if (!this.session.isStreaming) {
 			this.present(content);
@@ -4130,6 +4175,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingCommandOutputSessionId = sessionId;
 		const items = Array.isArray(content) ? content : [content as Component];
 		this.#pendingCommandOutput.push(...items);
+		// No feedback here on purpose: mounting anything into the transcript
+		// mid-turn (even a status line) re-renders rows below the growing live
+		// block and duplicates them in native scrollback — the exact regression
+		// issues #4806/#6767 pin. The queue flushes at the next settle.
 	}
 
 	/** Mount every command panel queued for the current session while the agent was streaming. */
@@ -4490,6 +4539,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#commandController.handleFreshCommand();
 	}
 
+	handleResetContextCommand(): Promise<void> {
+		return this.#commandController.handleResetContextCommand();
+	}
+
 	async handleDropCommand(): Promise<void> {
 		if (this.#vibeSessionTransitionBlocked()) return;
 		this.#prepareSessionSwitch();
@@ -4767,6 +4820,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.handleCtrlZ();
 	}
 
+	resetDisplayAfterAppearanceRefresh(): void {
+		const refreshAppearance = this.ui.terminal.refreshAppearance;
+		if (refreshAppearance) {
+			const token = this.#nextAppearanceRequestToken++;
+			const request = {
+				token,
+				deadline: Date.now() + CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS,
+			};
+			this.#appearanceRefreshRequest = request;
+			const acceptedToken = refreshAppearance.call(this.ui.terminal, token);
+			if (acceptedToken !== token && this.#appearanceRefreshRequest === request) {
+				this.#appearanceRefreshRequest = undefined;
+			}
+		} else {
+			this.#appearanceRefreshRequest = undefined;
+		}
+		// Preserve Ctrl+L's immediate full replay when the probe is unsupported,
+		// receives no response, or reports an unchanged appearance.
+		this.ui.resetDisplay();
+	}
+
 	handleDequeue(): void {
 		this.#inputController.handleDequeue();
 	}
@@ -4800,6 +4874,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.canBranch();
 	}
 
+	/** Reserves plain `b` only after /btw has a completed branch action to handle. */
+	handlesBtwBranchKey(): boolean {
+		return this.#btwController.handlesBranchKey();
+	}
+
 	handleBtwBranchKey(): Promise<boolean> {
 		return this.#btwController.handleBranch();
 	}
@@ -4812,9 +4891,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleCopy();
 	}
 
-	async handleBtwBranch(question: string, assistantMessage: AssistantMessage): Promise<void> {
+	async handleBtwBranch(
+		question: string,
+		assistantMessage: AssistantMessage,
+		leafId: string,
+		sessionId: string,
+	): Promise<void> {
 		try {
-			const result = await this.session.branchFromBtw(question, assistantMessage);
+			const result = await this.session.branchFromBtw(question, assistantMessage, leafId, sessionId);
 			if (result.cancelled) {
 				this.showStatus("/btw branch cancelled", { dim: true });
 				return;
