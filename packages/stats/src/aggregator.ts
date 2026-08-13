@@ -110,6 +110,12 @@ function defaultWorkerCount(): number {
 	// Bun 1.3.x can abort the macOS process when stats sync workers re-enter
 	// the compiled `omp` binary. Keep macOS on the documented serial path.
 	if (process.platform === "darwin") return 1;
+	// Windows: stats sync workers leave the stats.db file lock held after the
+	// sync completes (unfinalized prepared statements in the worker keep the
+	// deferred `sqlite3_close` from completing, oven-sh/bun#25964), so temp
+	// config cleanup after `closeDb()` fails with EBUSY. The serial path
+	// parses on the main thread and never leaks the handle.
+	if (process.platform === "win32") return 1;
 	// `navigator.hardwareConcurrency` is the portable answer in Bun; fall
 	// back to a small fixed pool if it's somehow unavailable.
 	const hw = typeof navigator !== "undefined" ? (navigator.hardwareConcurrency ?? 0) : 0;

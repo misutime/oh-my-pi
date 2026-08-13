@@ -71,8 +71,15 @@ it("stops writing when the real terminal path crosses the backlog cap", () => {
 		for (let i = 0; i < 70; i++) terminal.write(frame);
 
 		// The 65th MiB crosses the 64 MiB cap and marks the terminal dead;
-		// later frames must not reach stdout.
-		expect(writes).toBe(65);
+		// later frames must not reach stdout. On Windows the ConPTY chunker
+		// splits each frame into many stdout.write calls, so only the exact
+		// count is platform-specific — the invariant is that writes stop.
+		const writesAfterBurst = writes;
+		for (let i = 0; i < 5; i++) terminal.write(frame);
+		expect(writes).toBe(writesAfterBurst);
+		if (process.platform !== "win32") {
+			expect(writesAfterBurst).toBe(65);
+		}
 		process.stdout.emit("drain");
 	} finally {
 		stdout.mockRestore();

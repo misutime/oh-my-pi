@@ -86,7 +86,11 @@ describe("auth-broker snapshot cache", () => {
 			await writeAuthBrokerSnapshotCache({ path: cachePath, token: TOKEN, url: URL, snapshot });
 
 			const stat = await fs.stat(cachePath);
-			expect(stat.mode & 0o777).toBe(0o600);
+			if (process.platform !== "win32") {
+				// Windows chmod only models the read-only bit; exact mode bits
+				// are a POSIX concept and cannot be asserted there.
+				expect(stat.mode & 0o777).toBe(0o600);
+			}
 			const payload = await fs.readFile(cachePath);
 			expect(payload[CACHE_VERSION_OFFSET]).toBe(CURRENT_CACHE_VERSION);
 			expect(new TextDecoder().decode(payload)).not.toContain("secret-api-key");

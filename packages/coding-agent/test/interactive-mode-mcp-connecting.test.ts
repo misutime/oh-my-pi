@@ -97,6 +97,8 @@ describe("InteractiveMode MCP connection status", () => {
 				connectedServers: [],
 				failedServers: [],
 			}),
+			// Fork: MCP connection status renders without the dim style.
+			{ dim: false },
 		);
 	});
 

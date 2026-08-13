@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import {
 	buildDesktopNotifyCommand,
 	type DesktopNotifier,
@@ -22,7 +23,9 @@ describe("hasLinuxDesktopSession", () => {
 
 	it("accepts the systemd user bus socket when the address is not exported", () => {
 		const env = { XDG_RUNTIME_DIR: "/run/user/1000" };
-		const fileExists = (path: string) => path === "/run/user/1000/bus";
+		// The product joins with node:path, which emits `\` on Windows; mirror
+		// that so the assertion holds on every host.
+		const fileExists = (p: string) => p === path.join(env.XDG_RUNTIME_DIR, "bus");
 
 		expect(hasLinuxDesktopSession("linux", env, fileExists)).toBe(true);
 		expect(hasLinuxDesktopSession("linux", env, () => false)).toBe(false);

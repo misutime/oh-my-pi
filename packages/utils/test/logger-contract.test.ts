@@ -48,6 +48,9 @@ async function runScenario(scenario: string): Promise<ScenarioResult> {
 			env: {
 				...process.env,
 				HOME: primaryDir,
+				// Node's os.homedir() on Windows reads USERPROFILE, not HOME;
+				// pin it too so the child resolves ~/.omp under the sandbox.
+				USERPROFILE: primaryDir,
 				PI_CONFIG_DIR: ".omp",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",

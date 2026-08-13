@@ -14,11 +14,14 @@
  * `TempDir`, closes the stats DB handle, and tears everything back down in the
  * matching `afterEach`.
  */
+
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach } from "bun:test";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { closeDb } from "@oh-my-pi/omp-stats/db";
-import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 const XDG_KEYS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
 
@@ -47,6 +50,34 @@ export function installStatsTestIsolation(prefix: string): StatsTestIsolation {
 
 	afterEach(() => {
 		closeDb();
+		// Bun defers sqlite3_close on Windows until unreferenced prepared
+		// statements are garbage-collected (oven-sh/bun#25964), which keeps the
+		// .db file locked and makes the TempDir removal below fail with EBUSY.
+		// closeDb() already forces a GC, but tests that closed the singleton
+		// mid-test (or opened their own `new Database(...)` handles) leave dead
+		// statements behind too, so sweep again before removing the temp dir.
+		Bun.gc(true);
+		// A sync that parsed sessions can leave stats.db's WAL/-shm files in a
+		// transient (~1s) Windows delete-pending state even after the connection
+		// is closed. Opening and closing one fresh connection checkpoints the
+		// WAL and releases those handles, so the TempDir removal below succeeds.
+		const statsDbPath = getStatsDbPath();
+		if (fs.existsSync(statsDbPath)) {
+			try {
+				const flush = new Database(statsDbPath);
+				flush.run("PRAGMA wal_checkpoint(TRUNCATE)");
+				flush.close();
+			} catch {
+				// The DB may be mid-write from a leaked handle; the removal below surfaces it.
+			}
+			for (const suffix of ["-wal", "-shm"]) {
+				try {
+					fs.rmSync(statsDbPath + suffix, { force: true });
+				} catch {
+					// still transiently locked; removeSyncWithRetries covers the tail
+				}
+			}
+		}
 		if (originalConfigDir === undefined) {
 			delete process.env.PI_CONFIG_DIR;
 		} else {
@@ -58,7 +89,16 @@ export function installStatsTestIsolation(prefix: string): StatsTestIsolation {
 			else process.env[key] = prior;
 		}
 		setAgentDir(originalAgentDir);
-		tempDir?.removeSync();
+		// The serial cost-backfill path can leave a bun:sqlite statement
+		// referenced past every GC sweep (oven-sh/bun#25964), locking the temp
+		// dir on Windows past the removal retry window. Swallow the failure —
+		// the OS temp reaper cleans it up. A single shot (no 2 s retry window)
+		// keeps the teardown hook under its 5 s limit under parallel-suite load.
+		try {
+			fs.rmSync(tempDir.path(), { recursive: true, force: true });
+		} catch {
+			// leave for the OS temp reaper
+		}
 		tempDir = null;
 	});
 

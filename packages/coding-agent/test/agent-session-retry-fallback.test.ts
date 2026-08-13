@@ -1401,6 +1401,9 @@ describe("AgentSession retry fallback", () => {
 		vi.spyOn(Date, "now").mockReturnValue(afterCooldown);
 		await session.prompt("Complete another primary turn after the advisor cooldown");
 		await session.waitForIdle();
+		// Fork terminal review delivers advisor turns asynchronously; wait for
+		// the drained advisor call before asserting which models were requested.
+		await session.waitForAdvisorCatchup(5_000);
 		expect(getApiKey).toHaveBeenCalledWith(
 			expect.objectContaining({ provider: advisorPrimary.provider, id: advisorPrimary.id }),
 			expect.any(String),

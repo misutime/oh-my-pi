@@ -175,7 +175,9 @@ describe("init_experiment", () => {
 		delete process.env.OMP_AUTORESEARCH_DB_DIR;
 		closeAllAutoresearchStorages();
 		await Bun.sleep(0);
-		await dbOverride.remove();
+		// Windows keeps the SQLite db file locked briefly after close
+		// (oven-sh/bun#25964); best-effort cleanup, OS temp reaper covers it.
+		await dbOverride.remove().catch(() => {});
 	});
 
 	it("opens a new session and persists scope and metric metadata", async () => {
@@ -355,7 +357,9 @@ describe("run_experiment", () => {
 		delete process.env.OMP_AUTORESEARCH_DB_DIR;
 		closeAllAutoresearchStorages();
 		await Bun.sleep(0);
-		await dbOverride.remove();
+		// Windows keeps the SQLite db file locked briefly after close
+		// (oven-sh/bun#25964); best-effort cleanup, OS temp reaper covers it.
+		await dbOverride.remove().catch(() => {});
 	});
 
 	it("rejects when no session is active", async () => {
@@ -446,7 +450,9 @@ describe("log_experiment", () => {
 		delete process.env.OMP_AUTORESEARCH_DB_DIR;
 		closeAllAutoresearchStorages();
 		await Bun.sleep(0);
-		await dbOverride.remove();
+		// Windows keeps the SQLite db file locked briefly after close
+		// (oven-sh/bun#25964); best-effort cleanup, OS temp reaper covers it.
+		await dbOverride.remove().catch(() => {});
 	});
 
 	async function setupRun(dir: string, runtime = createSessionRuntime()) {

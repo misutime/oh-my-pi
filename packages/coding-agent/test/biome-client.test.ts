@@ -45,22 +45,40 @@ async function createFakeBiomeCommand(
 	expectedInput: string,
 	formattedOutput: string,
 ): Promise<string> {
-	const command = path.join(tempDir, "biome");
+	const targetFile = path.join(tempDir, "example.ts");
+	// Windows cannot spawn POSIX shebang scripts, so produce a .cmd batch file there.
+	const command = path.join(tempDir, process.platform === "win32" ? "biome.cmd" : "biome");
 	const expectedInputPath = path.join(tempDir, "expected-input.ts");
 	const formattedOutputPath = path.join(tempDir, "formatted-output.ts");
 	await Bun.write(expectedInputPath, expectedInput);
 	await Bun.write(formattedOutputPath, formattedOutput);
-	await Bun.write(
-		command,
-		`#!/bin/sh
+	if (process.platform === "win32") {
+		await Bun.write(
+			command,
+			[
+				"@echo off",
+				`if not "%1"=="format" exit /b 7`,
+				`if not "%2"=="--write" exit /b 8`,
+				`if not "%3"=="${targetFile}" exit /b 10`,
+				`fc /b "%3" "${expectedInputPath}" >nul 2>&1 || exit /b 9`,
+				`copy /y "${formattedOutputPath}" "%3" >nul`,
+				"exit /b 0",
+				"",
+			].join("\r\n"),
+		);
+	} else {
+		await Bun.write(
+			command,
+			`#!/bin/sh
 test "$1" = "format" || exit 7
 test "$2" = "--write" || exit 8
-test "$3" = "${path.join(tempDir, "example.ts")}" || exit 10
+test "$3" = "${targetFile}" || exit 10
 cmp -s "$3" "${expectedInputPath}" || exit 9
 cp "${formattedOutputPath}" "$3"
 exit 0
 `,
-	);
+		);
+	}
 	await fs.chmod(command, 0o755);
 	return command;
 }
@@ -119,8 +137,12 @@ describe("BiomeClient format", () => {
 
 	test("returns the original content when Biome fails", async () => {
 		const tempDir = await makeTempDir();
-		const command = path.join(tempDir, "biome-failure");
-		await Bun.write(command, "#!/bin/sh\ncat >/dev/null\nexit 1\n");
+		const command = path.join(tempDir, process.platform === "win32" ? "biome-failure.cmd" : "biome-failure");
+		if (process.platform === "win32") {
+			await Bun.write(command, "@echo off\r\necho biome failed >&2\r\nexit /b 1\r\n");
+		} else {
+			await Bun.write(command, "#!/bin/sh\ncat >/dev/null\nexit 1\n");
+		}
 		await fs.chmod(command, 0o755);
 		const targetFile = path.join(tempDir, "example.ts");
 		const content = "export const value = 1;\n";

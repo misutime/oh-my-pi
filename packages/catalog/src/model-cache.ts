@@ -105,6 +105,21 @@ function getSharedDb(): Database {
 	return db;
 }
 
+/**
+ * @internal Close and drop the shared cache connection — test-only.
+ * The shared connection is held open for the process lifetime (it is the
+ * default models.db for callers without an explicit dbPath); tests that point
+ * the agent dir at a temp directory must close it before removing that
+ * directory, since SQLite file handles make rm fail with EBUSY on Windows.
+ */
+export function resetModelCacheConnection(): void {
+	if (sharedDb) {
+		sharedDb.close();
+		sharedDb = null;
+		sharedDbPath = null;
+	}
+}
+
 function withModelCacheDb<T>(dbPath: string | undefined, useDb: (db: Database) => T): T {
 	if (!dbPath) return useDb(getSharedDb());
 	const db = openDb(dbPath);

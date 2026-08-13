@@ -1971,10 +1971,17 @@ providers:
 		// Pre-create so the before/after comparison works whether or not
 		// registry construction happens to invoke the key command itself.
 		fs.writeFileSync(commandLogPath, "");
+		// A helper script avoids shell quoting of the exec path (which contains
+		// backslashes on Windows and mangles the inline `-e` source there).
+		const keyScriptPath = path.join(tempDir, "llama-cpp-key-command.js");
+		fs.writeFileSync(
+			keyScriptPath,
+			`require("node:fs").appendFileSync(${JSON.stringify(commandLogPath)}, "x"); process.exit(1);`,
+		);
 		writeRawModelsJson({
 			"llama.cpp": {
 				baseUrl: "http://127.0.0.1:8080",
-				apiKey: `!"${process.execPath}" -e 'require("node:fs").appendFileSync(${JSON.stringify(commandLogPath)}, "x"); process.exit(1);'`,
+				apiKey: `!"${process.execPath}" ${JSON.stringify(keyScriptPath)}`,
 				api: "openai-responses",
 				discovery: { type: "llama.cpp" },
 				models: [{ id: "protected-model", reasoning: false, input: ["text"] }],

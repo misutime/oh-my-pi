@@ -3,6 +3,7 @@ import * as net from "node:net";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import {
+	__resetProxyCache,
 	connectProxiedSocket,
 	getProxyForProvider,
 	getProxyForUrl,
@@ -106,6 +107,9 @@ beforeEach(() => {
 		saved[key] = Bun.env[key];
 		delete Bun.env[key];
 	}
+	// Files share a process under parallel bun test; a stale module-level
+	// cache from another file's lookups would shadow freshly set env here.
+	__resetProxyCache();
 });
 
 afterEach(() => {

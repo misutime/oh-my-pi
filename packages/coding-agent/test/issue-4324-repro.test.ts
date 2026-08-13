@@ -14,6 +14,8 @@
  * shows up in `~/.omp/logs/omp.log` without regressing idle-worker shutdown.
  */
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { createWorkerSubprocess, type SpawnedSubprocess } from "@oh-my-pi/pi-coding-agent/subprocess/worker-client";
 
@@ -24,7 +26,14 @@ interface FakeWorkerOutbound {
 
 /** Build a spawn command that emits `stderr` verbatim then exits with `exitCode`. */
 function stderrExitCommand(stderr: string, exitCode: number): { cmd: string[] } {
-	const script = `process.stderr.write(${JSON.stringify(stderr)}); process.exit(${exitCode});`;
+	// Windows command lines cap at ~32K, so a >16 KiB stderr payload embedded
+	// in `-e` fails with ENAMETOOLONG. Replay the payload from a temp file.
+	const payloadPath = path.join(
+		os.tmpdir(),
+		`omp-issue-4324-${process.pid}-${Math.random().toString(36).slice(2)}.txt`,
+	);
+	fs.writeFileSync(payloadPath, stderr);
+	const script = `process.stderr.write(require("node:fs").readFileSync(${JSON.stringify(payloadPath)})); process.exit(${exitCode});`;
 	return { cmd: [process.execPath, "-e", script] };
 }
 

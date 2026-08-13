@@ -127,7 +127,9 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 	it("pops keyboard enhancement frames on both screens when crashing from a fullscreen overlay", () => {
 		const { terminal, writes } = startCapturedTerminal();
 		process.stdin.emit("data", "\x1b[?0u");
-		expect(terminal.kittyEnableSequence).toBe("\x1b[>5u");
+		// ConPTY hosts (Windows) downgrade the kitty enable frame to flag 1.
+		const expectedEnable = process.platform === "win32" ? "\x1b[>1u" : "\x1b[>5u";
+		expect(terminal.kittyEnableSequence).toBe(expectedEnable);
 
 		terminal.write(`\x1b[?1049h${terminal.kittyEnableSequence}`);
 		setAltScreenActive(true);

@@ -168,14 +168,18 @@ describe("AgentSession python cleanup", () => {
 		originalNullPrompt = undefined;
 		vi.restoreAllMocks();
 		AgentStorage.resetInstance();
-		await pythonExecutor.disposeAllKernelSessions();
+		// The kernel-session registry is module-global and shared across tests in
+		// this file; under parallel-suite load a lingering session's shutdown can
+		// wedge. Bound each teardown step so a hang fails the hook fast instead
+		// of stalling the whole file.
+		await Promise.race([pythonExecutor.disposeAllKernelSessions(), Bun.sleep(1_000)]);
 		await Bun.sleep(0);
 		// Best-effort cleanup: createAgentSession opens AuthStorage/AgentStorage
 		// inside agentDir that may outlive the test (dispose() doesn't close them).
 		// On Windows the leaked SQLite handles keep the dir locked; swallow EBUSY
 		// rather than failing the test — the OS temp dir reaper will clean up.
 		for (const tempDir of [...tempDirs.splice(0), ...agentDirPool.splice(0)]) {
-			await tempDir.remove().catch(() => {});
+			await Promise.race([tempDir.remove().catch(() => {}), Bun.sleep(1_000)]);
 		}
 	});
 

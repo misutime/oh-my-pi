@@ -79,7 +79,13 @@ async function createClaudeFixture(): Promise<{ info: ForeignSessionInfo; store:
 	return { info, store };
 }
 
-describe("ClaudeSessionStore", () => {
+// Claude's .projects layout encodes the cwd with path separators replaced by
+// `-`, which on Windows leaves the drive-colon in the directory name — illegal
+// on NTFS. The conversion logic is POSIX-fixture-tested; Windows cannot build
+// the on-disk layout.
+const describeClaudeStore = process.platform === "win32" ? describe.skip : describe;
+
+describeClaudeStore("ClaudeSessionStore", () => {
 	it("uses current history metadata and converts linked messages in memory", async () => {
 		const { info, store } = await createClaudeFixture();
 
@@ -302,7 +308,7 @@ describe("CodexSessionStore", () => {
 });
 
 describe("foreign session persistence", () => {
-	it("writes a fresh OMP identity with source provenance", async () => {
+	(process.platform === "win32" ? it.skip : it)("writes a fresh OMP identity with source provenance", async () => {
 		const { info, store } = await createClaudeFixture();
 		const sessionDir = path.join(tempRoot, "omp-sessions");
 

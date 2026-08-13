@@ -10,6 +10,7 @@ import type { CommitCommandArgs, ConventionalAnalysis, NumstatEntry } from "../.
 import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { discoverAuthStorage, discoverContextFiles, loadCliExtensionProviders } from "../../sdk";
+import type { AuthStorage } from "../../session/auth-storage";
 import * as git from "../../utils/git";
 import { abortOnGitFailure, pushOrAbort } from "../execute";
 import { type ExistingChangelogEntries, runCommitAgentSession } from "./agent";
@@ -29,7 +30,22 @@ interface CommitExecutionContext {
 export async function runAgenticCommit(args: CommitCommandArgs): Promise<{ usedFallback: boolean }> {
 	const cwd = getProjectDir();
 	const [settings, authStorage] = await Promise.all([Settings.init({ cwd }), discoverAuthStorage()]);
+	try {
+		return await runAgenticCommitWithAuth(args, cwd, settings, authStorage);
+	} finally {
+		// The pipeline owns the authStorage it discovered; without this close the
+		// agent.db SQLite handle stays open for the process lifetime (silent on
+		// POSIX, EBUSY on Windows when callers remove the agent dir).
+		authStorage.close();
+	}
+}
 
+async function runAgenticCommitWithAuth(
+	args: CommitCommandArgs,
+	cwd: string,
+	settings: Settings,
+	authStorage: AuthStorage,
+): Promise<{ usedFallback: boolean }> {
 	process.stdout.write("● Resolving model...\n");
 	const modelRegistry = new ModelRegistry(authStorage);
 	await modelRegistry.refresh();

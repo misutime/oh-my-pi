@@ -395,6 +395,16 @@ FROM model_usage_legacy
 		instances.clear();
 	}
 
+	/**
+	 * Close this storage and its auth store, releasing the agent.db SQLite
+	 * handle. On Windows the db file stays locked until every handle is
+	 * closed, so callers that open an isolated Settings (which owns an
+	 * AgentStorage) must close it when done.
+	 */
+	close(): void {
+		this.#close();
+	}
+
 	#close(): void {
 		this.#listSettingsStmt.finalize();
 		this.#upsertModelUsageStmt.finalize();

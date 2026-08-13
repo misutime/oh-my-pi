@@ -212,10 +212,21 @@ function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: 
 	}
 }
 
+/**
+ * Canonical absolute-path form for Map keys. Native grep returns forward-slash
+ * paths on Windows while `path.resolve` yields backslashes; normalizing both
+ * sides keeps `rangesByAbsPath`/`archiveDisplayMap` lookups separator-agnostic
+ * (issue #4618 Windows tests exposed the mismatch: `:N-M` range filtering was
+ * silently skipped on Windows).
+ */
+function canonicalPathKey(filePath: string): string {
+	return path.resolve(filePath).replace(/\\/g, "/");
+}
+
 function matchAbsolutePath(matchPath: string, searchPath: string): string {
-	if (matchPath === "") return searchPath;
-	if (path.isAbsolute(matchPath)) return matchPath;
-	return path.resolve(searchPath, matchPath);
+	if (matchPath === "") return canonicalPathKey(searchPath);
+	const resolved = path.isAbsolute(matchPath) ? matchPath : path.resolve(searchPath, matchPath);
+	return canonicalPathKey(resolved);
 }
 
 /**
@@ -297,7 +308,7 @@ async function resolveArchiveSearchPaths(
 		const tempPath = path.join(tempDir, `${idx}-${safeBase}`);
 		await writeFile(tempPath, text);
 		resolvedPaths[idx] = tempPath;
-		displayMap.set(tempPath, entry);
+		displayMap.set(canonicalPathKey(tempPath), entry);
 		displaySet.add(entry);
 	}
 
@@ -1060,12 +1071,12 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						if (!resolved) continue;
 						const materializedExternalPath = materializedExternalPaths.get(spec.clean);
 						if (materializedExternalPath) {
-							mergeRangesInto(rangesByAbsPath, path.resolve(materializedExternalPath), spec.ranges);
+							mergeRangesInto(rangesByAbsPath, canonicalPathKey(materializedExternalPath), spec.ranges);
 							continue;
 						}
 						if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
 							// Non-archive entry; ensure the cleaned path resolves to a regular file.
-							const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
+							const absKey = canonicalPathKey(resolveReadPath(resolved, this.session.cwd));
 							const stats = await stat(absKey).catch(() => null);
 							if (!stats) {
 								throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
@@ -1077,7 +1088,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 							}
 							mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
 						} else {
-							mergeRangesInto(rangesByAbsPath, path.resolve(resolved), spec.ranges);
+							mergeRangesInto(rangesByAbsPath, canonicalPathKey(resolved), spec.ranges);
 						}
 					}
 					// When the only input was an archive selector, surface that selector instead

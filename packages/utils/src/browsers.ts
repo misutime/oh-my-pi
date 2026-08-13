@@ -375,6 +375,15 @@ async function extractZipArchive(archivePath: string, destination: string): Prom
 	const entries = readCentralDirectory(archive);
 	await fsp.mkdir(destination, { recursive: true });
 	const root = path.resolve(destination);
+	// Windows: creating a file/dir symlink needs SeCreateSymbolicLinkPrivilege
+	// (developer mode or elevation). Chrome-for-Testing zips carry symlink
+	// entries, so degrade gracefully: directory links become junctions (no
+	// privilege needed), file links become content copies. Applied after all
+	// entries are extracted so link targets are present.
+	const pendingLinks: Array<{ outputPath: string; target: string }> = [];
+	const deferSymlink = (outputPath: string, target: string): void => {
+		pendingLinks.push({ outputPath, target });
+	};
 	for (const entry of entries) {
 		const outputPath = safeArchivePath(root, entry.name);
 		const mode = entry.externalAttributes >>> 16;
@@ -390,12 +399,35 @@ async function extractZipArchive(archivePath: string, destination: string): Prom
 		if (type === ZIP_SYMLINK_MODE) {
 			const target = contents.toString("utf8");
 			validateSymlinkTarget(root, outputPath, target);
-			await fsp.symlink(target, outputPath);
+			try {
+				await fsp.symlink(target, outputPath);
+			} catch (err) {
+				const code = (err as NodeJS.ErrnoException).code;
+				if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP" || code === "UNKNOWN") {
+					deferSymlink(outputPath, target);
+				} else {
+					throw err;
+				}
+			}
 			continue;
 		}
 		await fsp.writeFile(outputPath, contents, { mode: mode & 0o777 ? mode & 0o777 : 0o644 });
 		if ((mode & ZIP_FILE_TYPE_MASK) === ZIP_REGULAR_FILE_MODE && mode & 0o777)
 			await fsp.chmod(outputPath, mode & 0o777);
+	}
+	for (const { outputPath, target } of pendingLinks) {
+		const resolved = path.resolve(path.dirname(outputPath), target);
+		try {
+			const stat = await fsp.stat(resolved);
+			if (stat.isDirectory()) {
+				// Directory junction: no admin/developer-mode privilege required.
+				await fsp.symlink(resolved, outputPath, "junction");
+			} else {
+				await fsp.copyFile(resolved, outputPath);
+			}
+		} catch {
+			// Link target absent from this archive; leave the entry unresolved.
+		}
 	}
 }
 

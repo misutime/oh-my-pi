@@ -15,6 +15,22 @@ const RESET_FLAG = "--reset";
 // blank (or any non-base64) content as "no archive embedded" and builds the
 // dashboard from source instead; see src/embedded-client.ts.
 
+async function writeGeneratedFile(content: string): Promise<void> {
+	// Windows antivirus scanners can briefly hold a handle on the file right
+	// after it was written, making the truncate/write fail with a transient
+	// EUNKNOWN/EACCES (observed as errno -134). Retry with short backoff
+	// before surfacing the error.
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await Bun.write(GENERATED_FILE, content);
+			return;
+		} catch (err) {
+			if (attempt >= 4) throw err;
+			await Bun.sleep(50 * 2 ** attempt);
+		}
+	}
+}
+
 async function collectFiles(dir: string): Promise<string[]> {
 	const entries = await fs.readdir(dir, { withFileTypes: true });
 	const files: string[] = [];
@@ -53,7 +69,7 @@ async function buildArchiveBase64(dir: string): Promise<string> {
 
 async function main(): Promise<void> {
 	if (process.argv.includes(RESET_FLAG)) {
-		await Bun.write(GENERATED_FILE, "");
+		await writeGeneratedFile("");
 		console.log(`Reset ${GENERATED_FILE}`);
 		return;
 	}
@@ -65,7 +81,7 @@ async function main(): Promise<void> {
 
 	await $`bun run build`;
 	const archiveBase64 = await buildArchiveBase64(DIST_CLIENT_DIR);
-	await Bun.write(GENERATED_FILE, archiveBase64);
+	await writeGeneratedFile(archiveBase64);
 	console.log(`Generated ${GENERATED_FILE}`);
 }
 

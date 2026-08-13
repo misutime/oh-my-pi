@@ -233,7 +233,9 @@ describe("ACP initialize conformance", () => {
 				version: VERSION,
 			}),
 		);
-		expect(response.agentInfo!.version).toBe(pkg.version);
+		// The fork appends a "-dev" marker when running from source (utils/dirs.ts),
+		// so the advertised version must match the published version modulo that marker.
+		expect(response.agentInfo!.version).toBe(VERSION.endsWith("-dev") ? `${pkg.version}-dev` : pkg.version);
 	});
 
 	it("preserves the agentCapabilities contract clients depend on", async () => {

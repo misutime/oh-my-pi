@@ -25,6 +25,15 @@ const originalSshClient = Bun.env.SSH_CLIENT;
 const originalTmux = Bun.env.TMUX;
 const originalTerminalId = TERMINAL.id;
 
+// Windows ConPTY downgrades the kitty enable frame to flag 1 (disambiguate
+// only) — or 3 when event-type reporting is already active — because flag 4
+// (report alternate keys) makes ConPTY drop Shift+letter keypresses. See
+// isConPTYHosted() in ProcessTerminal. The probe ordering contract under test
+// is identical; only the frame flags differ.
+const isConPTYHost = process.platform === "win32";
+const KITTY_BASIC_ENABLE = isConPTYHost ? "\x1b[>1u" : "\x1b[>5u";
+const KITTY_EVENTS_ENABLE = isConPTYHost ? "\x1b[>3u" : "\x1b[>7u";
+
 function restoreEnv(name: "SSH_CONNECTION" | "SSH_TTY" | "SSH_CLIENT" | "TMUX", value: string | undefined): void {
 	if (value === undefined) {
 		delete Bun.env[name];
@@ -56,7 +65,7 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 
 		const out = harness.writes.join("");
 		expect(harness.terminal.kittyProtocolActive).toBe(true);
-		expect(out).toContain("\x1b[>5u");
+		expect(out).toContain(KITTY_BASIC_ENABLE);
 		expect(out).not.toContain("\x1b[>4;2m");
 	});
 
@@ -68,8 +77,8 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		await harness.feed("\x1b[?5u");
 
 		const out = harness.writes.join("");
-		expect(out).toContain("\x1b[>5u");
-		expect(out).not.toContain("\x1b[>7u");
+		expect(out).toContain(KITTY_BASIC_ENABLE);
+		expect(out).not.toContain(KITTY_EVENTS_ENABLE);
 	});
 
 	it("preserves event-type reporting enabled by a parent app", async () => {
@@ -79,7 +88,7 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 
 		await harness.feed("\x1b[?3u");
 
-		expect(harness.writes.join("")).toContain("\x1b[>7u");
+		expect(harness.writes.join("")).toContain(KITTY_EVENTS_ENABLE);
 	});
 
 	it("enables kitty when the DA1 sentinel arrives before the kitty reply (#2042)", async () => {
@@ -93,10 +102,10 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 
 		const out = harness.writes.join("");
 		expect(harness.terminal.kittyProtocolActive).toBe(true);
-		expect(out).toContain("\x1b[>5u");
+		expect(out).toContain(KITTY_BASIC_ENABLE);
 		const enableIdx = out.indexOf("\x1b[>4;2m");
 		const disableIdx = out.indexOf("\x1b[>4;0m");
-		const kittyIdx = out.indexOf("\x1b[>5u");
+		const kittyIdx = out.indexOf(KITTY_BASIC_ENABLE);
 		expect(enableIdx).toBeGreaterThanOrEqual(0);
 		expect(disableIdx).toBeGreaterThan(enableIdx);
 		expect(kittyIdx).toBeGreaterThan(enableIdx);
@@ -204,7 +213,7 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 			margin: 0,
 		});
 		await harness.settle();
-		expect(harness.writes.join("")).toContain("\x1b[?1049h\x1b[>5u");
+		expect(harness.writes.join("")).toContain(`\x1b[?1049h${KITTY_BASIC_ENABLE}`);
 		harness.writes.length = 0;
 
 		overlay.hide();

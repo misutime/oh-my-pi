@@ -348,7 +348,14 @@ describe("Agent hub Enter activation", () => {
 			complete = true;
 		});
 		try {
-			for (let i = 0; i < 20_000 && visited < 8_192 && !complete; i++) await Promise.resolve();
+			// On Windows (IOCP-backed) Bun delivers file-stream chunks on the event
+			// loop rather than via microtasks, so pump macrotasks too. `setImmediate`
+			// is a real event-loop turn that fake timers do not intercept, so the
+			// frozen setTimeout stays pending until `runOnlyPendingTimers()`.
+			for (let i = 0; i < 20_000 && visited < 8_192 && !complete; i++) {
+				await Promise.resolve();
+				await new Promise(resolve => setImmediate(resolve));
+			}
 			expect(visited).toBeGreaterThanOrEqual(8_192);
 			vi.runOnlyPendingTimers();
 			await visit;

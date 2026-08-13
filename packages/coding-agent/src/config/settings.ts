@@ -659,6 +659,17 @@ export class Settings {
 		return this.#storage;
 	}
 
+	/**
+	 * Release the persisted AgentStorage handle (agent.db), if this instance
+	 * opened one. Windows keeps the db file locked until every handle closes,
+	 * so short-lived command paths that load isolated Settings must call this
+	 * before returning. Safe to call when no storage was opened.
+	 */
+	close(): void {
+		this.#storage?.close();
+		this.#storage = null;
+	}
+
 	getCwd(): string {
 		return this.#cwd;
 	}
@@ -2407,6 +2418,10 @@ export function resetSettingsForTest(): void {
 		ref.deref()?.cancelPendingSaves();
 	}
 	liveSettingsInstances.clear();
+	// Release the global instance's AgentStorage handle (agent.db): Windows
+	// keeps the db file locked until every handle closes, so test teardown
+	// rm of the agent dir would otherwise fail with EBUSY.
+	globalInstance?.close();
 	globalInstance = null;
 	globalInstancePromise = null;
 	clearBoundSettingsMethods();

@@ -257,7 +257,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		return persisted;
 	}
 
-	it("preserves a late advisor concern after a terminal answer without waking the primary", async () => {
+	it("intervenes once on a late advisor concern after a terminal answer", async () => {
 		const { session, sessionManager, mock, advisorMock } = await createCompletedAdvisorSession();
 		const persisted = capturePersistedAdvice(sessionManager);
 
@@ -276,7 +276,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(advisorCards).toHaveLength(1);
 		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
 		expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
-		expect(mock.calls.length).toBe(1);
+		// Fork terminal review: an interrupting concern after the terminal answer
+		// triggers ONE primary re-evaluation (terminal intervention), not zero.
+		expect(mock.calls.length).toBe(2);
 	});
 
 	it("waits for preserved advisor card hooks and persistence before reporting catch-up", async () => {
@@ -302,18 +304,25 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(persisted).toEqual([]);
 
 		let catchupSettled = false;
-		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+		void session.waitForAdvisorCatchup(1000).then(() => {
 			catchupSettled = true;
-			return caughtUp;
 		});
 		await Promise.resolve();
 		expect(catchupSettled).toBe(false);
 		expect(persisted).toEqual([]);
 
 		releaseHook.resolve();
-		expect(await catchup).toBe(true);
+		// Fork terminal review: the late concern also wakes the primary, whose
+		// intervention turn appends fresh advisor work. Poll until the advisor
+		// drain is fully settled rather than expecting one synchronous catchup.
+		await session.waitForIdle();
+		let caughtUp = false;
+		for (let attempt = 0; attempt < 10 && !caughtUp; attempt++) {
+			caughtUp = await session.waitForAdvisorCatchup(1000);
+		}
+		expect(caughtUp).toBe(true);
 		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
-		expect(mock.calls).toHaveLength(1);
+		expect(mock.calls).toHaveLength(2);
 	});
 
 	it("waits for preserved advisor card start hooks before reporting catch-up", async () => {
@@ -335,16 +344,23 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await hookStarted.promise;
 
 		let catchupSettled = false;
-		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+		void session.waitForAdvisorCatchup(1000).then(() => {
 			catchupSettled = true;
-			return caughtUp;
 		});
 		await Promise.resolve();
 		expect(catchupSettled).toBe(false);
 
 		releaseHook.resolve();
-		expect(await catchup).toBe(true);
-		expect(mock.calls).toHaveLength(1);
+		// Fork terminal review: the late concern also wakes the primary, whose
+		// intervention turn appends fresh advisor work. Poll until the advisor
+		// drain is fully settled rather than expecting one synchronous catchup.
+		await session.waitForIdle();
+		let caughtUp = false;
+		for (let attempt = 0; attempt < 10 && !caughtUp; attempt++) {
+			caughtUp = await session.waitForAdvisorCatchup(1000);
+		}
+		expect(caughtUp).toBe(true);
+		expect(mock.calls).toHaveLength(2);
 	});
 
 	it("steers a late advisor blocker after a terminal answer so the primary corrects it", async () => {
@@ -382,7 +398,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await session.waitForIdle();
 
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(2);
-		expect(mock.calls.length).toBe(1);
+		// Fork terminal review: the new late concern triggers one primary
+		// re-evaluation (terminal intervention).
+		expect(mock.calls.length).toBe(2);
 	});
 
 	it("preserves late advice after terminal text with provider metadata blocks", async () => {
@@ -404,7 +422,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		await session.waitForIdle();
 
 		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
-		expect(mock.calls.length).toBe(1);
+		// Fork terminal review: the late concern triggers one primary
+		// re-evaluation (terminal intervention).
+		expect(mock.calls.length).toBe(2);
 	});
 
 	it("preserves an advisor concern steered before the user interrupt, without auto-resuming", async () => {

@@ -178,9 +178,13 @@ export async function transactionAsync<T>(db: Database, fn: () => Promise<T>): P
 
 export function closeQuietly(db: Database | undefined | null): void {
 	if (db === undefined || db === null) return;
+	// bun:sqlite on Windows defers sqlite3_close until every prepared statement
+	// is finalized, and finalization only happens on GC (oven-sh/bun#25964).
+	// Sweep, then strict-close; fall back to the plain close when busy.
+	Bun.gc(true);
 	try {
-		db.close();
+		db.close(true);
 	} catch {
-		// Best-effort cleanup.
+		db.close();
 	}
 }

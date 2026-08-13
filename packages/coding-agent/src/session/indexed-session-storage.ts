@@ -190,7 +190,10 @@ export class IndexedSessionStorage implements SessionStorage {
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {
-		const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+		// dir may carry either separator on Windows; index keys mirror the
+		// platform path exactly, so normalize the prefix to match.
+		const sep = dir.includes("\\") ? "\\" : "/";
+		const prefix = dir.endsWith("/") || dir.endsWith("\\") ? dir : `${dir}${sep}`;
 		const out: string[] = [];
 		for (const path of this.#index.keys()) {
 			if (!path.startsWith(prefix)) continue;

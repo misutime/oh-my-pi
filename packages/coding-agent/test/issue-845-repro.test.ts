@@ -30,7 +30,9 @@ describe("issue-845: resolveUpdateMethod follows symlinks/junctions", () => {
 		fs.writeFileSync(path.join(realBinDir, "omp"), "#!/bin/sh\n", { mode: 0o755 });
 
 		linkedBinDir = path.join(tmpRoot, "link-bin");
-		fs.symlinkSync(realBinDir, linkedBinDir, "dir");
+		// Directory junctions need no developer mode on Windows and behave like
+		// symlinks for realpath resolution, which is what this test exercises.
+		fs.symlinkSync(realBinDir, linkedBinDir, process.platform === "win32" ? "junction" : "dir");
 		ompPathViaLink = path.join(linkedBinDir, "omp");
 	});
 

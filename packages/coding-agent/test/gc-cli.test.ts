@@ -12,6 +12,7 @@ import {
 	getBlobsDir,
 	getHistoryDbPath,
 	getSessionsDir,
+	removeWithRetries,
 	setAgentDir,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils";
@@ -50,7 +51,10 @@ afterEach(async () => {
 	process.exitCode = originalExitCode;
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
-	await fs.rm(root, { recursive: true, force: true });
+	await removeWithRetries(root).catch(() => {
+		// Windows may keep a WAL-checkpointed db file locked briefly after the
+		// command returns (oven-sh/bun#25964); best-effort, OS temp reaper.
+	});
 });
 
 function hashFor(label: string): string {
@@ -420,7 +424,10 @@ describe("runGcCommand history checkpoint", () => {
 
 		expect(result.wal?.checkpointed).toBe(true);
 		expect(result.wal?.walBytes).toBe(0);
-		expect((await fs.stat(`${dbPath}-wal`)).size).toBe(0);
+		// TRUNCATE checkpoint: bun:sqlite removes the WAL file entirely (or
+		// leaves a zero-byte file) once it is drained; both mean "nothing left".
+		const walStat = await fs.stat(`${dbPath}-wal`).catch(() => null);
+		expect(walStat === null || walStat.size === 0).toBe(true);
 	});
 
 	test("--apply propagates WAL checkpoint failures and releases the gc lock", async () => {
@@ -460,7 +467,9 @@ describe("runGcCommand history checkpoint", () => {
 			reader.close();
 			writer.close();
 		}
-	}, 10_000);
+		// The checkpoint busy_timeout (5 s) plus gc run and connection close
+		// can exceed 10 s under parallel-suite CPU load on Windows.
+	}, 30_000);
 });
 
 describe("runGcCommand cold-session archive", () => {

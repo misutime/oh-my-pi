@@ -156,6 +156,17 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	await term.flush();
 }
 
+/**
+ * ConPTY hosts (win32 unconditionally) arm a 150 ms post-full-paint settle
+ * that defers the trailing ordinary render (#2095). Tests asserting the final
+ * viewport after a non-forced render must wait it out on Windows.
+ */
+async function settleConPTY(term: VirtualTerminal): Promise<void> {
+	if (process.platform !== "win32") return settle(term);
+	await Bun.sleep(160);
+	await settle(term);
+}
+
 // Outside a multiplexer a resize paints the viewport immediately and defers the
 // authoritative full replay (rewrap + ED3 + history rebuild) until the drag has
 // been quiet for the resize settle window (120 ms). Tests asserting the settled
@@ -1080,7 +1091,7 @@ describe("TUI terminal-state regressions", () => {
 
 				component.setLines(rows("row-", 24));
 				tui.requestRender();
-				await settle(term);
+				await settleConPTY(term);
 
 				const viewport = visible(term).filter(line => line.trim().length > 0);
 				expect(viewport).toHaveLength(6);
@@ -2108,7 +2119,7 @@ describe("TUI terminal-state regressions", () => {
 				const writes = captureWrites(term);
 				component.setLines(finalFrame);
 				tui.requestRender();
-				await settle(term);
+				await settleConPTY(term);
 
 				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(finalFrame);
@@ -2124,7 +2135,7 @@ describe("TUI terminal-state regressions", () => {
 				// tail commits normally on the update path — exactly once.
 				component.setLines([...finalFrame, ...rows("tail-", 5)]);
 				tui.requestRender();
-				await settle(term);
+				await settleConPTY(term);
 
 				expect(visible(term).map(line => line.trim())).toEqual(rows("tail-", 5));
 				const grownHistory = term
@@ -2493,7 +2504,7 @@ describe("TUI terminal-state regressions", () => {
 				const expanded = ["edited-line", ...rows("line-", 118), "prompt-row"];
 				component.setLines(expanded);
 				tui.requestRender();
-				await settle(term);
+				await settleConPTY(term);
 				expect(visible(term).map(line => line.trim())).toEqual([
 					"line-109",
 					"line-110",
@@ -2517,7 +2528,7 @@ describe("TUI terminal-state regressions", () => {
 				const short = [...rows("short-", 14), "prompt-row"];
 				component.setLines(short);
 				tui.requestRender();
-				await settle(term);
+				await settleConPTY(term);
 
 				expect(visible(term).map(line => line.trim())).toEqual([
 					"short-5",
@@ -3214,7 +3225,7 @@ describe("TUI terminal-state regressions", () => {
 				term.scrollLines(-1);
 				await settle(term);
 				handle.hide();
-				await settle(term);
+				await settleConPTY(term);
 
 				expect(term.getScrollBuffer().some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();
 				expect(visible(term).some(line => line.includes("OV_SENTINEL_4_"))).toBeFalse();

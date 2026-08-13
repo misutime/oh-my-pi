@@ -1410,7 +1410,16 @@ async function readLearnedLessons(memoryRoot: string): Promise<string> {
 }
 
 function encodeProjectPath(cwd: string): string {
-	return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+	const encoded = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+	// Windows MAX_PATH (~260) is easily exceeded when the project sits in a
+	// deep tree (e.g. a temp sandbox): fold long encodings down to a bounded
+	// readable prefix plus a content hash. Deterministic per cwd; only
+	// affects paths that would otherwise be unusable on Windows.
+	if (encoded.length > 96) {
+		const hash = Bun.hash.wyhash(encoded).toString(36);
+		return `${encoded.slice(0, 60)}~${hash}~`;
+	}
+	return encoded;
 }
 
 function unixNow(): number {

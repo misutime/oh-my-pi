@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
+import { resetModelCacheConnection } from "@oh-my-pi/pi-catalog/model-cache";
 import { runCommitCommand } from "@oh-my-pi/pi-coding-agent/commit";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getProjectAgentDir, setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -60,6 +62,11 @@ beforeEach(async () => {
 afterEach(async () => {
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
+	// Close the agent.db singleton(s) the settings machinery opened in
+	// agentTmp; on Windows the process-held SQLite handle makes rm fail EBUSY.
+	AgentStorage.resetInstance();
+	// The default model cache keeps a shared connection at agentDir/models.db.
+	resetModelCacheConnection();
 	await tmp.remove();
 	await agentTmp.remove();
 });

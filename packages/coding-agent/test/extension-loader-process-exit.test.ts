@@ -191,14 +191,20 @@ try {
 		expect(stderr).toBe("");
 	});
 
-	it("lets host SIGINT exit once while a guarded callback remains pending", async () => {
-		const { exitCode, stdout, stderr } = await runGuardedShutdownProbe("sigint");
+	// Windows has no POSIX signals: bun's SIGINT emulation terminates the
+	// process with exit code 1 without invoking JS handlers, so neither the
+	// 128+signum exit code nor the cleanup callback can be observed there.
+	it.skipIf(process.platform === "win32")(
+		"lets host SIGINT exit once while a guarded callback remains pending",
+		async () => {
+			const { exitCode, stdout, stderr } = await runGuardedShutdownProbe("sigint");
 
-		expect(exitCode).toBe(130);
-		expect(stdout).toBe("guard-active\ncleanup:sigint\n");
-		expect(stderr).not.toContain("[Unhandled Rejection]");
-		expect(stderr).not.toContain("ExtensionExitError");
-	});
+			expect(exitCode).toBe(130);
+			expect(stdout).toBe("guard-active\ncleanup:sigint\n");
+			expect(stderr).not.toContain("[Unhandled Rejection]");
+			expect(stderr).not.toContain("ExtensionExitError");
+		},
+	);
 
 	it("lets fatal cleanup exit once while a guarded callback remains pending", async () => {
 		const { exitCode, stdout, stderr } = await runGuardedShutdownProbe("fatal");
@@ -210,21 +216,25 @@ try {
 		expect(stderr).not.toContain("ExtensionExitError");
 	});
 
-	it("exits cleanly on host SIGHUP when postmortem initialized inside a guard window (#7393)", async () => {
-		// Mirror the shipped bundle: postmortem's exit primitive is first resolved
-		// while withHostGuard has replaced process.reallyExit with a throwing stub.
-		// A preload swaps reallyExit before the entry's static postmortem import
-		// evaluates; the entry then restores it (as the guard's finally does) and
-		// self-SIGHUPs (the TUI terminal-disconnect path). A lazily resolved exit
-		// primitive must pick up the restored native reallyExit and exit 129
-		// instead of looping on ExtensionExitError.
-		const preload = writeModule(
-			"guard-init-preload.ts",
-			"globalThis.__ompNativeReallyExit = process.reallyExit;\n" +
-				'process.reallyExit = (() => { throw new Error("guarded during init"); });\n',
-		);
-		const { exitCode, stdout, stderr } = await runProbe(
-			`
+	// SIGHUP does not exist on Windows: process.kill(pid, "SIGHUP") throws
+	// ENOSYS, so the TUI terminal-disconnect exit path this pins is POSIX-only.
+	it.skipIf(process.platform === "win32")(
+		"exits cleanly on host SIGHUP when postmortem initialized inside a guard window (#7393)",
+		async () => {
+			// Mirror the shipped bundle: postmortem's exit primitive is first resolved
+			// while withHostGuard has replaced process.reallyExit with a throwing stub.
+			// A preload swaps reallyExit before the entry's static postmortem import
+			// evaluates; the entry then restores it (as the guard's finally does) and
+			// self-SIGHUPs (the TUI terminal-disconnect path). A lazily resolved exit
+			// primitive must pick up the restored native reallyExit and exit 129
+			// instead of looping on ExtensionExitError.
+			const preload = writeModule(
+				"guard-init-preload.ts",
+				"globalThis.__ompNativeReallyExit = process.reallyExit;\n" +
+					'process.reallyExit = (() => { throw new Error("guarded during init"); });\n',
+			);
+			const { exitCode, stdout, stderr } = await runProbe(
+				`
 import { postmortem } from "@oh-my-pi/pi-utils";
 postmortem.register("probe", reason => process.stdout.write(\`cleanup:\${reason}\\n\`));
 process.reallyExit = globalThis.__ompNativeReallyExit;
@@ -234,14 +244,15 @@ process.kill(process.pid, "SIGHUP");
 // real signal delivery cannot be driven by fake timers.
 await Bun.sleep(10_000);
 `,
-			[preload],
-		);
+				[preload],
+			);
 
-		expect(exitCode).toBe(129);
-		expect(stdout).toBe("armed\ncleanup:sighup\n");
-		expect(stderr).not.toContain("ExtensionExitError");
-		expect(stderr).not.toContain("Unhandled Rejection");
-	});
+			expect(exitCode).toBe(129);
+			expect(stdout).toBe("armed\ncleanup:sighup\n");
+			expect(stderr).not.toContain("ExtensionExitError");
+			expect(stderr).not.toContain("Unhandled Rejection");
+		},
+	);
 
 	it("only the outermost guard restores process.exit when guards nest", async () => {
 		const originalExit = process.exit;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { realpathSync } from "node:fs";
+import { realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { symlink, unlink } from "node:fs/promises";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
@@ -10,6 +10,19 @@ import { loadSessionExtensions } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+
+// Windows needs developer mode/elevation for filesystem symlinks; the
+// symlink-retarget test cannot run without it.
+let symlinksSupported = true;
+if (process.platform === "win32") {
+	const probe = `${TempDir.createSync("@pi-symlink-probe-").path()}`;
+	try {
+		symlinkSync(probe, `${probe}-link`);
+		unlinkSync(`${probe}-link`);
+	} catch {
+		symlinksSupported = false;
+	}
+}
 
 let tempDir: TempDir;
 let authStorage: AuthStorage;
@@ -50,7 +63,7 @@ test("buildSessionOptions uses trusted extensions as the exact module allowlist"
 	expect(options.additionalExtensionPaths).toEqual([realpathSync.native(trustedPath)]);
 });
 
-test("trusted file symlinks cannot be retargeted to expand a directory", async () => {
+(symlinksSupported ? test : test.skip)("trusted file symlinks cannot be retargeted to expand a directory", async () => {
 	const trustedTarget = tempDir.join("trusted-target.ts");
 	const replacementDir = tempDir.join("replacement");
 	const trustedLink = tempDir.join("trusted.ts");

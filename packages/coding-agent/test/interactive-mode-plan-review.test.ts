@@ -423,12 +423,25 @@ describe("InteractiveMode plan review rendering", () => {
 	});
 
 	it("opens the annotation external editor from the real plan review overlay", async () => {
-		const editorPath = path.join(tempDir.path(), "annotation-editor.sh");
-		await Bun.write(
-			editorPath,
-			"#!/bin/sh\nprintf '%s\\n%s\\n' '- add rollback command' '- include smoke test' > \"$1\"\n",
-		);
-		await fs.chmod(editorPath, 0o755);
+		const isWin = process.platform === "win32";
+		const editorPath = path.join(tempDir.path(), isWin ? "annotation-editor.cmd" : "annotation-editor.sh");
+		if (isWin) {
+			// Windows cannot exec a shebang script, and batch `echo` emits CRLF
+			// (which the annotation parser treats literally). Delegate to a bun
+			// script so the output bytes match the POSIX fixture exactly.
+			const editorJs = path.join(tempDir.path(), "annotation-editor.js");
+			await Bun.write(
+				editorJs,
+				'require("node:fs").writeFileSync(process.argv[2], "- add rollback command\\n- include smoke test\\n");',
+			);
+			await Bun.write(editorPath, `@echo off\r\nbun "%~dp0annotation-editor.js" "%1"\r\n`);
+		} else {
+			await Bun.write(
+				editorPath,
+				"#!/bin/sh\nprintf '%s\\n%s\\n' '- add rollback command' '- include smoke test' > \"$1\"\n",
+			);
+			await fs.chmod(editorPath, 0o755);
+		}
 		const previousEditor = Bun.env.EDITOR;
 		const previousVisual = Bun.env.VISUAL;
 		const keybindings = KeybindingsManager.inMemory({

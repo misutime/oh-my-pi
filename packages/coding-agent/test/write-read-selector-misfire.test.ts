@@ -7,6 +7,12 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { readArchiveEntries, writeArchive } from "@oh-my-pi/pi-coding-agent/utils/zip";
 
+// Creating or opening a literal colon-named file is POSIX-only (issue #4618):
+// Windows cannot make a directory entry whose name contains `:` (Bun maps
+// `log:1-5` to an NTFS alternate data stream of `log`, not a real file), so
+// these cases cannot run there.
+const itOnPosix = process.platform === "win32" ? it.skip : it;
+
 // A read-only step that mis-dispatches `read` as `write` passes the full read
 // expression (`src/foo.tsx:1-260:raw`) as the target. Because a literal colon
 // filename is legal on POSIX (issue #4618), that used to resolve to filesystem
@@ -43,7 +49,7 @@ describe("write refuses read-selector misfires", () => {
 		await fs.rm(dir, { recursive: true, force: true });
 	});
 
-	it("lets non-empty content deliberately create a selector-shaped filename", async () => {
+	itOnPosix("lets non-empty content deliberately create a selector-shaped filename", async () => {
 		const dir = await makeWorkspace();
 		const write = new WriteTool(session(dir));
 		const literal = "src/components/LoraSelector.tsx:1-260:raw";
@@ -53,7 +59,7 @@ describe("write refuses read-selector misfires", () => {
 		await fs.rm(dir, { recursive: true, force: true });
 	});
 
-	it("keeps an existing literal colon filename writable with empty content", async () => {
+	itOnPosix("keeps an existing literal colon filename writable with empty content", async () => {
 		const dir = await makeWorkspace();
 		await Bun.write(path.join(dir, "log:1-5"), "old");
 		const write = new WriteTool(session(dir));
@@ -127,7 +133,7 @@ describe("write refuses read-selector misfires", () => {
 		await fs.rm(dir, { recursive: true, force: true });
 	});
 
-	it("keeps an existing literal file whose name looks like a selector list writable", async () => {
+	itOnPosix("keeps an existing literal file whose name looks like a selector list writable", async () => {
 		const dir = await makeWorkspace();
 		const write = new WriteTool(session(dir));
 		const target = "report:1-2;archive:3-4";

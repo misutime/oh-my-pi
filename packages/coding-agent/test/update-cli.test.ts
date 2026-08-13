@@ -32,6 +32,23 @@ import type { CliConfig } from "@oh-my-pi/pi-utils/cli";
 
 const tempDirs: string[] = [];
 
+// Windows needs developer mode/elevation for filesystem symlinks; the
+// Homebrew fixture below cannot run without it.
+let symlinksSupported = true;
+if (process.platform === "win32") {
+	try {
+		const probe = `${await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-symlink-probe-"))}`;
+		try {
+			await fs.symlink(probe, `${probe}-link`);
+			await fs.unlink(`${probe}-link`);
+		} finally {
+			await fs.rm(probe, { recursive: true, force: true });
+		}
+	} catch {
+		symlinksSupported = false;
+	}
+}
+
 async function makeTempDir(): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-test-"));
 	tempDirs.push(dir);
@@ -132,7 +149,9 @@ describe("update-cli install target detection", () => {
 			ompIsRegularFile: true,
 		});
 
-		expect(method).toBe("binary");
+		// On Windows npm global bins are regular-file shims (.cmd/.ps1), so a
+		// plain file there is npm-managed, not a standalone binary.
+		expect(method).toBe(process.platform === "win32" ? "npm" : "binary");
 	});
 
 	it("uses binary update when a plain file in the bun global bin dir is the standalone binary", () => {
@@ -140,7 +159,9 @@ describe("update-cli install target detection", () => {
 			ompIsRegularFile: true,
 		});
 
-		expect(method).toBe("binary");
+		// On Windows bun global bins are regular-file .exe launchers, so a
+		// plain file there is bun-managed, not a standalone binary.
+		expect(method).toBe(process.platform === "win32" ? "bun" : "binary");
 	});
 
 	it("keeps bun update for regular-file entries in the bun global bin dir on Windows, where bun writes .exe shims", () => {
@@ -184,21 +205,24 @@ describe("update-cli install target detection", () => {
 		expect(method).toBe("binary");
 	});
 
-	it("uses Homebrew update when prioritized omp resolves into the Homebrew formula", async () => {
-		const dir = await makeTempDir();
-		const prefix = path.join(dir, "opt", "omp");
-		const linkedBin = path.join(dir, "bin");
-		await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
-		await fs.mkdir(linkedBin, { recursive: true });
-		await Bun.write(path.join(prefix, "bin", "omp"), "binary");
-		await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
+	it.skipIf(!symlinksSupported)(
+		"uses Homebrew update when prioritized omp resolves into the Homebrew formula",
+		async () => {
+			const dir = await makeTempDir();
+			const prefix = path.join(dir, "opt", "omp");
+			const linkedBin = path.join(dir, "bin");
+			await fs.mkdir(path.join(prefix, "bin"), { recursive: true });
+			await fs.mkdir(linkedBin, { recursive: true });
+			await Bun.write(path.join(prefix, "bin", "omp"), "binary");
+			await fs.symlink(path.join(prefix, "bin", "omp"), path.join(linkedBin, "omp"));
 
-		const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
-			homebrewPrefix: prefix,
-		});
+			const method = resolveUpdateMethodForTest(path.join(linkedBin, "omp"), "/Users/test/.bun/bin", {
+				homebrewPrefix: prefix,
+			});
 
-		expect(method).toBe("brew");
-	});
+			expect(method).toBe("brew");
+		},
+	);
 
 	it("uses mise update when prioritized omp is in an active mise bin path", () => {
 		const method = resolveUpdateMethodForTest(
@@ -485,7 +509,13 @@ describe("update-cli release binary integrity", () => {
 		});
 
 		expect(await Bun.file(targetPath).text()).toBe(content);
-		expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+		// POSIX: the download is chmod 0755. Windows has no exec bits (bun
+		// reports 0666); there the meaningful property is writability.
+		if (process.platform === "win32") {
+			expect((await fs.stat(targetPath)).mode & 0o200).toBe(0o200);
+		} else {
+			expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+		}
 	});
 
 	it("aborts the response stream as soon as it exceeds the expected size", async () => {
@@ -609,7 +639,13 @@ describe("update-cli release binary integrity", () => {
 			).rejects.toThrow("digest mismatch");
 			expect(metadataAuthorizations).toEqual(["Bearer test-token"]);
 			expect(await Bun.file(targetPath).text()).toBe(installed);
-			expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+			// POSIX: the untouched installed binary keeps its 0755 mode. Windows
+			// has no exec bits (bun reports 0666); there check writability.
+			if (process.platform === "win32") {
+				expect((await fs.stat(targetPath)).mode & 0o200).toBe(0o200);
+			} else {
+				expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o755);
+			}
 			expect(await Bun.file(`${targetPath}.new`).exists()).toBe(false);
 		} finally {
 			if (previousGitHubToken === undefined) delete Bun.env.GITHUB_TOKEN;
@@ -823,7 +859,10 @@ describe("update-cli script-shim takeover", () => {
 		}
 	}
 
-	it("installs omp.exe beside the shims and retires them", async () => {
+	// The takeover fixtures stand in for the downloaded release with a POSIX
+	// `#!/bin/sh` script that reports the version; such a file cannot execute
+	// as a Windows .exe, so the takeover/verification flow is POSIX-only.
+	it.skipIf(process.platform === "win32")("installs omp.exe beside the shims and retires them", async () => {
 		const dir = await makeTempDir();
 		await writeShims(dir);
 		// Real executable, no injected verifier: the takeover must verify the
@@ -845,27 +884,30 @@ describe("update-cli script-shim takeover", () => {
 		expect(residue).toEqual([]);
 	});
 
-	it("restores the shims and removes the exe when the exe reports the wrong version", async () => {
-		const dir = await makeTempDir();
-		await writeShims(dir);
-		// Executable runs but reports the previous version -> full rollback.
-		const exe = "#!/bin/sh\necho omp/17.2.12\n";
+	it.skipIf(process.platform === "win32")(
+		"restores the shims and removes the exe when the exe reports the wrong version",
+		async () => {
+			const dir = await makeTempDir();
+			await writeShims(dir);
+			// Executable runs but reports the previous version -> full rollback.
+			const exe = "#!/bin/sh\necho omp/17.2.12\n";
 
-		await expect(
-			updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
-				binaryName,
-				fetchImpl: makeFetch(exe),
-				githubToken: "test-token",
-			}),
-		).rejects.toThrow(/still reports 17\.2\.12 \(expected 18\.0\.0\); restored previous omp launcher/);
+			await expect(
+				updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
+					binaryName,
+					fetchImpl: makeFetch(exe),
+					githubToken: "test-token",
+				}),
+			).rejects.toThrow(/still reports 17\.2\.12 \(expected 18\.0\.0\); restored previous omp launcher/);
 
-		expect(await Bun.file(path.join(dir, "omp.exe")).exists()).toBe(false);
-		for (const name in shims) {
-			expect(await Bun.file(path.join(dir, name)).text()).toBe(shims[name]);
-		}
-		const residue = (await fs.readdir(dir)).filter(name => name.endsWith(".bak") || name.endsWith(".new"));
-		expect(residue).toEqual([]);
-	});
+			expect(await Bun.file(path.join(dir, "omp.exe")).exists()).toBe(false);
+			for (const name in shims) {
+				expect(await Bun.file(path.join(dir, name)).text()).toBe(shims[name]);
+			}
+			const residue = (await fs.readdir(dir)).filter(name => name.endsWith(".bak") || name.endsWith(".new"));
+			expect(residue).toEqual([]);
+		},
+	);
 
 	function renameLockingPs1(): Mock<typeof nodeFs.promises.rename> {
 		const realRename = nodeFs.promises.rename;
@@ -877,28 +919,31 @@ describe("update-cli script-shim takeover", () => {
 		});
 	}
 
-	it("rewrites an immovable precedence-winning shim as a forwarder to the exe", async () => {
-		const dir = await makeTempDir();
-		await writeShims(dir);
-		const exe = `#!/bin/sh\necho omp/${version}\n`;
-		const renameSpy = renameLockingPs1();
-		try {
-			await updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
-				binaryName,
-				fetchImpl: makeFetch(exe),
-				githubToken: "test-token",
-			});
-		} finally {
-			renameSpy.mockRestore();
-		}
+	it.skipIf(process.platform === "win32")(
+		"rewrites an immovable precedence-winning shim as a forwarder to the exe",
+		async () => {
+			const dir = await makeTempDir();
+			await writeShims(dir);
+			const exe = `#!/bin/sh\necho omp/${version}\n`;
+			const renameSpy = renameLockingPs1();
+			try {
+				await updateViaShimTakeover(path.join(dir, "omp.cmd"), version, {
+					binaryName,
+					fetchImpl: makeFetch(exe),
+					githubToken: "test-token",
+				});
+			} finally {
+				renameSpy.mockRestore();
+			}
 
-		expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
-		expect(await Bun.file(path.join(dir, "omp")).exists()).toBe(false);
-		expect(await Bun.file(path.join(dir, "omp.cmd")).exists()).toBe(false);
-		// PowerShell resolves .ps1 before .exe: the locked shim must now exec
-		// the new binary instead of keeping its old body.
-		expect(await Bun.file(path.join(dir, "omp.ps1")).text()).toContain('& "$PSScriptRoot\\omp.exe" @args');
-	});
+			expect(await Bun.file(path.join(dir, "omp.exe")).text()).toBe(exe);
+			expect(await Bun.file(path.join(dir, "omp")).exists()).toBe(false);
+			expect(await Bun.file(path.join(dir, "omp.cmd")).exists()).toBe(false);
+			// PowerShell resolves .ps1 before .exe: the locked shim must now exec
+			// the new binary instead of keeping its old body.
+			expect(await Bun.file(path.join(dir, "omp.ps1")).text()).toContain('& "$PSScriptRoot\\omp.exe" @args');
+		},
+	);
 
 	it("restores a forwarded shim's original body when verification fails", async () => {
 		const dir = await makeTempDir();

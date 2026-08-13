@@ -48,6 +48,11 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
 		previousHeadless = setTerminalHeadless(false);
 		delete Bun.env.TMUX;
+		// Isolate the host session: running inside Windows Terminal leaks
+		// WT_SESSION/TERM_PROGRAM and arms the Windows Terminal appearance poll
+		// timer, changing fake-timer counts and query totals.
+		delete Bun.env.WT_SESSION;
+		delete Bun.env.TERM_PROGRAM;
 	});
 
 	afterEach(() => {
@@ -681,7 +686,10 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		// Simulate kitty-capable terminal reply (level >=1).
 		process.stdin.emit("data", "\x1b[?1u");
 
-		const pushes = writes.filter(w => w === "\x1b[>5u" || w === "\x1b[>7u" || w === "\x1b[>31u").length;
+		// ConPTY hosts (Windows) downgrade the kitty frame to flag 1 / 3.
+		const pushes = writes.filter(
+			w => w === "\x1b[>5u" || w === "\x1b[>7u" || w === "\x1b[>31u" || w === "\x1b[>1u" || w === "\x1b[>3u",
+		).length;
 		expect(pushes).toBe(1);
 
 		terminal.stop();

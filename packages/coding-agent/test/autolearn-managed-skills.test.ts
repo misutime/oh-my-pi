@@ -13,7 +13,24 @@ import {
 import { parseFrontmatter, removeWithRetries } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 
-describe("managed-skills primitives", () => {
+/** Whether this host can create filesystem symlinks (Windows needs developer
+ * mode or elevation). The symlink-escape tests cannot run without it. */
+async function probeSymlinkPrivilege(): Promise<boolean> {
+	if (process.platform !== "win32") return true;
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-symlink-probe-"));
+	try {
+		await fs.symlink(dir, path.join(dir, "probe"));
+		return true;
+	} catch {
+		return false;
+	} finally {
+		await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
+}
+
+const managedSkillsDescribe = (await probeSymlinkPrivilege()) ? describe : describe.skip;
+
+managedSkillsDescribe("managed-skills primitives", () => {
 	let tempHome: string;
 
 	let originalAgentDir: string;

@@ -293,7 +293,10 @@ describe("mergeIsolatedChanges", () => {
 
 		expect(outcome.changesApplied).toBe(true);
 		expect(outcome.hadAnyChanges).toBe(true);
-		expect(await Bun.file(path.join(repoRoot, "foo.txt")).text()).toBe("new\n");
+		// Windows git (core.autocrlf=true, the default) writes CRLF when it
+		// applies a patch; normalize before the byte-exact comparison.
+		const applied = await Bun.file(path.join(repoRoot, "foo.txt")).text();
+		expect(process.platform === "win32" ? applied.replace(/\r\n/g, "\n") : applied).toBe("new\n");
 	});
 
 	it("prefers forward apply when both reverse-check and forward-check succeed", async () => {

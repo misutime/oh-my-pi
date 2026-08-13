@@ -3,8 +3,9 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { getProjectDir, logger, prompt } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
-import { Settings } from "../config/settings";
+import { type GroupTypeMap, Settings } from "../config/settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import type { AuthStorage } from "../session/auth-storage";
 import { loadProjectContextFiles } from "../system-prompt";
 import * as git from "../utils/git";
 import { runAgenticCommit } from "./agentic";
@@ -49,6 +50,23 @@ async function runLegacyCommitCommand(args: CommitCommandArgs): Promise<void> {
 	const settings = await Settings.init({ cwd });
 	const commitSettings = settings.getGroup("commit");
 	const authStorage = await discoverAuthStorage();
+	try {
+		// The pipeline owns the authStorage it discovered; without this close the
+		// agent.db SQLite handle stays open for the process lifetime (silent on
+		// POSIX, EBUSY on Windows when callers remove the agent dir).
+		await runLegacyCommitWithAuth(args, cwd, settings, commitSettings, authStorage);
+	} finally {
+		authStorage.close();
+	}
+}
+
+async function runLegacyCommitWithAuth(
+	args: CommitCommandArgs,
+	cwd: string,
+	settings: Settings,
+	commitSettings: GroupTypeMap["commit"],
+	authStorage: AuthStorage,
+): Promise<void> {
 	const modelRegistry = new ModelRegistry(authStorage);
 	await modelRegistry.refresh();
 	await loadCliExtensionProviders(modelRegistry, settings, cwd);

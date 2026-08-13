@@ -47,6 +47,13 @@ describe("AgentSession advisor context maintenance", () => {
 		await tempDir.remove();
 	});
 
+	/** The fork's terminal-review path delivers advice asynchronously (drain is
+	 * fire-and-forget after the primary turn), so tests must wait for the advisor
+	 * backlog instead of assuming `session.prompt()` has already settled it. */
+	async function settleAdvisor(): Promise<void> {
+		await session.waitForAdvisorCatchup(5_000);
+	}
+
 	function createHarness(contextPromotionTarget?: string, contextPromotionEnabled = false): MaintenanceHarness {
 		const primaryMock = createMockModel({
 			provider: "anthropic",
@@ -188,6 +195,7 @@ describe("AgentSession advisor context maintenance", () => {
 		expect(session.getAdvisorCost()).toBeCloseTo(0.5, 8);
 
 		await session.prompt("small current update");
+		await settleAdvisor();
 
 		expect(advisorMock.calls).toHaveLength(1);
 		const advisorCall = advisorMock.calls[0];
@@ -253,6 +261,7 @@ describe("AgentSession advisor context maintenance", () => {
 		settings.set("compaction.thresholdTokens", threshold);
 
 		await session.prompt("tiny local-floor update");
+		await settleAdvisor();
 
 		const advisorCall = advisorMock.calls[0];
 		const update = advisorCall.context.messages.find(message => message.role === "user");
@@ -272,6 +281,7 @@ describe("AgentSession advisor context maintenance", () => {
 		advisor.state.messages.push(summary, retained);
 
 		await session.prompt("post-compaction update");
+		await settleAdvisor();
 
 		expect(advisorMock.calls).toHaveLength(1);
 		const sentContext = JSON.stringify(advisorMock.calls[0].context.messages);
@@ -290,6 +300,7 @@ describe("AgentSession advisor context maintenance", () => {
 		advisor.state.messages.push(summary, retained, fresh);
 
 		await session.prompt("equal-timestamp post-compaction update");
+		await settleAdvisor();
 
 		expect(advisorMock.calls).toHaveLength(1);
 		const sentContext = JSON.stringify(advisorMock.calls[0].context.messages);

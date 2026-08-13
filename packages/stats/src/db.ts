@@ -922,11 +922,38 @@ export function getMessageCount(): number {
 
 /**
  * Close the database connection.
+ *
+ * On Windows, Bun defers `sqlite3_close` until every prepared statement is
+ * finalized, and statements created with `db.prepare(...)` are only finalized
+ * when their JS wrapper is garbage-collected (oven-sh/bun#25964). Without a GC
+ * pass here the `.db` file stays locked after `closeDb()` for as long as no
+ * GC cycle happens to run — which breaks removing/renaming the database file
+ * right after close and made stats temp-dir cleanup fail in tests (`EBUSY:
+ * resource busy or locked, rm ...`). Force a full GC before closing so the
+ * close completes and the handle is actually released.
  */
 export function closeDb(): void {
 	if (db) {
-		db.close();
+		const handle = db;
 		db = null;
+		Bun.gc(true);
+		// Retry the strict close with bounded backoff: the last sync writes can
+		// leave a ~1s window where `sqlite3_close` reports BUSY (a statement is
+		// still finalizing). The default non-strict close silently defers and
+		// leaks the connection, keeping the .db file locked on Windows.
+		for (let attempt = 0; ; attempt++) {
+			try {
+				handle.close(true);
+				return;
+			} catch {
+				if (attempt >= 40) {
+					handle.close();
+					return;
+				}
+				Bun.gc(true);
+				Bun.sleepSync(50);
+			}
+		}
 	}
 }
 

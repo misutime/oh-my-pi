@@ -10,10 +10,14 @@ const FULL_CAPTURE_ERROR = "Full stderr capture must be requested when spawning 
 function stderrFixture(size: number, exitCode = 0, stdout = ""): string[] {
 	const fillLength = size - STDERR_HEAD.length - STDERR_TAIL.length;
 	const script = [
-		`await Bun.stdout.write(${JSON.stringify(stdout)});`,
+		// Windows: writing an empty string to a piped stdout makes Bun's
+		// ftruncate path throw EINVAL and crash the child; skip empty writes.
+		stdout ? `await Bun.stdout.write(${JSON.stringify(stdout)});` : "",
 		`await Bun.stderr.write(${JSON.stringify(STDERR_HEAD)} + "x".repeat(${fillLength}) + ${JSON.stringify(STDERR_TAIL)});`,
 		`process.exitCode = ${exitCode};`,
-	].join("\n");
+	]
+		.filter(line => line !== "")
+		.join("\n");
 	return ["bun", "-e", script];
 }
 

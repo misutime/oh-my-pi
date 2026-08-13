@@ -120,7 +120,10 @@ beforeAll(async () => {
 afterAll(async () => {
 	if (sharedRoot) {
 		await Bun.sleep(0);
-		await sharedRoot.remove();
+		// Windows: SQLite handles can still be releasing under parallel-suite
+		// load past removeWithRetries' 2 s window; a leftover temp sandbox is
+		// harmless (system temp is cleaned periodically), so don't fail the run.
+		await sharedRoot.remove().catch(() => {});
 	}
 	sharedRoot = undefined;
 });

@@ -153,32 +153,38 @@ async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions>
 	const selected = flags.blobs === true || flags.archive === true || flags.wal === true;
 	const settings =
 		flags.apply === true ? await Settings.loadIsolated({ agentDir }) : await Settings.loadReadOnly({ agentDir });
-	const getBoolean = (pathKey: "gc.blobs" | "gc.archive" | "gc.wal") => settings.get(pathKey);
-	const getNumber = (pathKey: "gc.coldArchiveAfterDays" | "gc.retainNewestGlobal" | "gc.retainNewestPerCwd") =>
-		settings.get(pathKey);
-	return {
-		apply: flags.apply === true,
-		json: flags.json === true,
-		agentDir,
-		runBlobs: selected ? flags.blobs === true : getBoolean("gc.blobs"),
-		runArchive: selected ? flags.archive === true : getBoolean("gc.archive"),
-		runWal: selected ? flags.wal === true : getBoolean("gc.wal"),
-		coldArchiveAfterDays: numberSetting(
-			flags.coldArchiveAfterDays,
-			getNumber("gc.coldArchiveAfterDays"),
-			getDefault("gc.coldArchiveAfterDays"),
-		),
-		retainNewestGlobal: numberSetting(
-			flags.retainNewestGlobal,
-			getNumber("gc.retainNewestGlobal"),
-			getDefault("gc.retainNewestGlobal"),
-		),
-		retainNewestPerCwd: numberSetting(
-			flags.retainNewestPerCwd,
-			getNumber("gc.retainNewestPerCwd"),
-			getDefault("gc.retainNewestPerCwd"),
-		),
-	};
+	try {
+		const getBoolean = (pathKey: "gc.blobs" | "gc.archive" | "gc.wal") => settings.get(pathKey);
+		const getNumber = (pathKey: "gc.coldArchiveAfterDays" | "gc.retainNewestGlobal" | "gc.retainNewestPerCwd") =>
+			settings.get(pathKey);
+		return {
+			apply: flags.apply === true,
+			json: flags.json === true,
+			agentDir,
+			runBlobs: selected ? flags.blobs === true : getBoolean("gc.blobs"),
+			runArchive: selected ? flags.archive === true : getBoolean("gc.archive"),
+			runWal: selected ? flags.wal === true : getBoolean("gc.wal"),
+			coldArchiveAfterDays: numberSetting(
+				flags.coldArchiveAfterDays,
+				getNumber("gc.coldArchiveAfterDays"),
+				getDefault("gc.coldArchiveAfterDays"),
+			),
+			retainNewestGlobal: numberSetting(
+				flags.retainNewestGlobal,
+				getNumber("gc.retainNewestGlobal"),
+				getDefault("gc.retainNewestGlobal"),
+			),
+			retainNewestPerCwd: numberSetting(
+				flags.retainNewestPerCwd,
+				getNumber("gc.retainNewestPerCwd"),
+				getDefault("gc.retainNewestPerCwd"),
+			),
+		};
+	} finally {
+		// loadIsolated opens an AgentStorage on agent.db; release the handle so
+		// Windows does not keep the db file locked after the command returns.
+		settings.close();
+	}
 }
 
 export function collectGcErrors(result: GcResult): string[] {
@@ -561,6 +567,22 @@ function historyHasSessionId(db: Database): boolean {
 	return rows.some(row => row.name === "session_id");
 }
 
+/**
+ * bun:sqlite on Windows defers sqlite3_close until every prepared statement is
+ * finalized, and finalization only happens on GC (oven-sh/bun#25964). Without
+ * a GC sweep before close, the db file stays locked for ~1s+, which makes
+ * Windows teardown `rm` fail with EBUSY (and holds the WAL). Strict-close
+ * throws while any statement is unfinalized, so fall back after the sweep.
+ */
+function closeGcDb(db: Database): void {
+	Bun.gc(true);
+	try {
+		db.close(true);
+	} catch {
+		db.close();
+	}
+}
+
 function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { deleted: number; ftsRebuilt: boolean } {
 	if (sessionIds.length === 0) return { deleted: 0, ftsRebuilt: false };
 	const db = new Database(dbPath);
@@ -581,7 +603,7 @@ function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { d
 		tx(sessionIds);
 		return { deleted, ftsRebuilt: deleted > 0 && hasFts };
 	} finally {
-		db.close();
+		closeGcDb(db);
 	}
 }
 
@@ -808,7 +830,7 @@ function buildStatsCleanupPlans(
 			if (match) match.node.statsPaths.add(match.logicalRoot);
 		}
 	} finally {
-		db.close();
+		closeGcDb(db);
 	}
 
 	for (const child of nodes) {
@@ -1111,7 +1133,7 @@ function reconcileStatsRowsForSessions(dbPath: string, plans: StatsCleanupPlan[]
 		tx(plans);
 		return deleted;
 	} finally {
-		db.close();
+		closeGcDb(db);
 	}
 }
 
@@ -1314,7 +1336,7 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 		result.log = sqliteNumber(row?.log);
 		result.checkpointedFrames = sqliteNumber(row?.checkpointed);
 	} finally {
-		db.close();
+		closeGcDb(db);
 	}
 	try {
 		result.walBytes = (await fs.stat(walPath)).size;

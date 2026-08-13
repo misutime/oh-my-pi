@@ -39,10 +39,13 @@ const ENV_KEYS = [
 ] as const;
 
 function quoteForConfig(p: string): string {
-	if (!/[\s"]/.test(p)) return p;
-	// Wrap in double quotes; our tokenizer preserves backslashes so Windows
-	// paths survive without further escaping.
-	return `"${p.replace(/(["])/g, "\\$1")}"`;
+	// Windows paths carry backslashes that the unquoted tokenizer treats as
+	// escapes; always wrap them in double quotes (whose tokenizer mode
+	// preserves backslashes) so they survive config round-trips.
+	if (process.platform === "win32" || /[\s"]/.test(p)) {
+		return `"${p.replace(/(["])/g, "\\$1")}"`;
+	}
+	return p;
 }
 
 describe("tokenizeCredentialProcessCommand", () => {
