@@ -114,13 +114,12 @@ describe("system prompt tool inventory", () => {
 	}
 
 	function inventoryFrom(text: string): string {
-		// Tolerate either prompt layout: the merge-base "# Inventory" / "ENV" framing and the
-		// reordered "# Tool Inventory" / "TOOL POLICY" framing on current main. The slice just
-		// needs to isolate the rendered tool list from the rest of the prompt.
+		// Isolate the tool list across prompt layouts by stopping at the next
+		// top-level or regular section heading.
 		const inventoryStart =
 			["# Tool Inventory", "# Inventory"].map(header => text.indexOf(header)).find(index => index >= 0) ?? -1;
 		expect(inventoryStart).toBeGreaterThan(-1);
-		const sectionEnds = ["\nENV\n", "\nTOOL POLICY", "\n# "]
+		const sectionEnds = ["\nENV\n", "\nTOOL POLICY", "\n§ ", "\n# "]
 			.map(marker => text.indexOf(marker, inventoryStart + 1))
 			.filter(index => index > inventoryStart);
 		const inventoryEnd = sectionEnds.length > 0 ? Math.min(...sectionEnds) : text.length;

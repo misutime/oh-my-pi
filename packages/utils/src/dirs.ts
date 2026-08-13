@@ -28,6 +28,9 @@ export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 /** Version string; appends "-dev" when running from source (not a compiled binary). */
 export const VERSION: string = `${version}${import.meta.url.includes("$bunfs") || import.meta.url.includes("~BUN") || import.meta.url.includes("%7EBUN") ? "" : "-dev"}`;
 
+/** Default User-Agent header string (e.g. "omp/17.2.12") */
+export const USER_AGENT = `omp/${VERSION}`;
+
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 

@@ -640,7 +640,7 @@ const usageSegment: StatusLineSegment = {
 	id: "usage",
 	render(ctx) {
 		const u = ctx.usage;
-		if (!u || (!u.fiveHour && !u.sevenDay)) {
+		if (!u || (!u.fiveHour && !u.sevenDay && !u.monthly)) {
 			return { content: "", visible: false };
 		}
 		const parts: string[] = [];
@@ -667,6 +667,18 @@ const usageSegment: StatusLineSegment = {
 					? theme.fg("muted", ` (${formatUsageReset(u.sevenDay.resetHours, "h")})`)
 					: "";
 			parts.push(`7d ${pctText}${reset}`);
+		}
+		if (u.monthly) {
+			// Cursor-only today (normalize gates monthly to provider === "cursor").
+			// `percent` is the used fraction; render the remaining fraction with an
+			// `L` (left) suffix, consistent with the fiveHour/sevenDay windows.
+			const remaining = 100 - u.monthly.percent;
+			const pctText = theme.fg(pickRemainingColor(remaining), `${Math.round(remaining)}%L`);
+			const reset =
+				u.monthly.resetHours !== undefined
+					? theme.fg("muted", ` (${formatUsageReset(u.monthly.resetHours, "h")})`)
+					: "";
+			parts.push(`mo ${pctText}${reset}`);
 		}
 		const content = withIcon(theme.icon.time, parts.join(theme.sep.dot));
 		return { content, visible: true };
